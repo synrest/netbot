@@ -1,0 +1,14 @@
+state/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+*.sqlite3
+generated/
+build/
+dist/
+.DS_Store
+*.swp
+.env
+.env.*
+config/*.netbot-migration-backup

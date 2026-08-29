@@ -1,0 +1,72 @@
+version: 1
+
+agents:
+  temporary:
+    desired_version: "0.3.0"
+
+hosts:
+
+  arasaka:
+    class: core
+    kind: physical
+    observed_names:
+      - arasaka
+    bindings:
+      tailscale:
+        node_id: "4582162682695456"
+        name: arasaka
+  kiroshi:
+    class: core
+    kind: physical
+    bindings:
+      tailscale:
+        node_id: "961106256404732"
+        name: kiroshi
+      ssh:
+        aliases:
+          - kiroshi
+  mikoshi:
+    class: core
+    bindings:
+      tailscale:
+        node_id: "813577720113717"
+        name: mikoshi
+      ssh:
+        aliases:
+          - mikoshi
+  orion:
+    class: satellite
+    kind: physical
+    os_family: linux
+    bindings:
+      tailscale:
+        node_id: "3614159598068992"
+        name: orion
+      ssh:
+        aliases:
+          - orion
+        user: lourdes
+        port: 22
+  orthanc-postgres:
+    class: child
+    kind: vm
+    parent: arasaka
+    observed_names:
+      - OrthancPostgres-Mac
+  lourdes:
+    class: unknown
+    observed_names:
+      - lourdes
+    lifecycle: retired
+    superseded_by: orion
+  oracle:
+    class: unknown
+    observed_names:
+      - oracle
+    bindings:
+      tailscale:
+        node_id: "4789064075134476"
+        name: oracle
+      ssh:
+        aliases:
+          - oracle
