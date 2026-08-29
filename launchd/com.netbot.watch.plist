@@ -3,13 +3,13 @@
 <plist version="1.0"><dict>
   <key>Label</key><string>com.netbot.watch</string>
   <key>ProgramArguments</key><array>
-    <string>/usr/local/bin/python3</string><string>-m</string><string>netbot.watcher</string>
+    <string>__NETBOT_BIN__/netbot-watch</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/zero/Developer/netbot</string>
-  <key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>/Users/zero/Developer/netbot</string><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>WorkingDirectory</key><string>__NETBOT_PREFIX__</string>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>60</integer>
-  <key>StandardOutPath</key><string>/Users/zero/Library/Logs/Netbot/watch.log</string>
-  <key>StandardErrorPath</key><string>/Users/zero/Library/Logs/Netbot/watch.err.log</string>
+  <key>StandardOutPath</key><string>__NETBOT_LOG_DIR__/watch.log</string>
+  <key>StandardErrorPath</key><string>__NETBOT_LOG_DIR__/watch.err.log</string>
 </dict></plist>

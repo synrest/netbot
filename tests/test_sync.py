@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import json
+import os
 import plistlib
 from contextlib import redirect_stdout
 from io import StringIO
@@ -79,9 +80,15 @@ class SyncTests(unittest.TestCase):
         for filename in ("com.netbot.sync.plist", "com.netbot.watch.plist"):
             with open(Path(__file__).parents[1] / "launchd" / filename, "rb") as stream:
                 plist = plistlib.load(stream)
-            self.assertTrue(plist["ProgramArguments"][0].startswith("/"))
+            if filename.endswith("watch.plist"):
+                self.assertTrue(plist["ProgramArguments"][0].startswith("__NETBOT_"))
+            else:
+                self.assertTrue(plist["ProgramArguments"][0].startswith("/"))
             self.assertNotIn("Sockets", plist)
-            self.assertEqual(plist["WorkingDirectory"], "/Users/zero/Developer/netbot")
+            self.assertIn("WorkingDirectory", plist)
+        with open(Path(__file__).parents[1] / "launchd" / "com.netbot.watch.plist", "rb") as stream:
+            watcher = plistlib.load(stream)
+        self.assertNotIn("/Users/zero/Developer/netbot", str(watcher))
 
     def test_watcher_launchd_supervision_contract(self):
         with open(Path(__file__).parents[1] / "launchd" / "com.netbot.watch.plist", "rb") as stream:
@@ -97,21 +104,23 @@ class SyncTests(unittest.TestCase):
 
     @mock.patch.object(service, "launchctl")
     def test_service_lifecycle_uses_user_launchd_domain(self, launchctl):
-        launchctl.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-        service.start()
-        launchctl.assert_called_with("bootstrap", service.domain(), str(service.plist_path()))
-        service.stop()
-        launchctl.assert_called_with("bootout", f"{service.domain()}/{service.LABEL}")
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"NETBOT_PREFIX": d}):
+            launchctl.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            service.start()
+            launchctl.assert_called_with("bootstrap", service.domain(), str(service.plist_path()))
+            service.stop()
+            launchctl.assert_called_with("bootout", f"{service.domain()}/{service.LABEL}")
 
     @mock.patch.object(service, "launchctl")
     def test_service_restart_boots_out_then_bootstraps(self, launchctl):
-        launchctl.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-        result = service.restart()
-        self.assertTrue(result["ok"])
-        self.assertEqual([call.args for call in launchctl.call_args_list], [
-            ("bootout", f"{service.domain()}/{service.LABEL}"),
-            ("bootstrap", service.domain(), str(service.plist_path())),
-        ])
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"NETBOT_PREFIX": d}):
+            launchctl.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            result = service.restart()
+            self.assertTrue(result["ok"])
+            self.assertEqual([call.args for call in launchctl.call_args_list], [
+                ("bootout", f"{service.domain()}/{service.LABEL}"),
+                ("bootstrap", service.domain(), str(service.plist_path())),
+            ])
 
 
 class WatcherTests(unittest.TestCase):
