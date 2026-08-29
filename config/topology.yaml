@@ -70,3 +70,9 @@ hosts:
       ssh:
         aliases:
           - oracle
+  netbot-test:
+    class: unknown
+    bindings:
+      tailscale:
+        node_id: "1479759345960161"
+        name: netbot-test

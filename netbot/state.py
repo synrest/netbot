@@ -79,6 +79,11 @@ class State:
         except sqlite3.OperationalError:
             return None
         return json.loads(row[0]) if row else None
+    def adoption_event(self, created_at, topology_identity, node_id, observed_name, details=None):
+        self.db.execute("CREATE TABLE IF NOT EXISTS adoption_events(id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, topology_identity TEXT NOT NULL, node_id TEXT NOT NULL, observed_name TEXT, details_json TEXT NOT NULL)")
+        payload = dict(details or {}); payload["observed_name"] = observed_name
+        self.db.execute("INSERT INTO adoption_events(created_at,topology_identity,node_id,observed_name,details_json) VALUES (?,?,?,?,?)", (created_at, topology_identity, str(node_id), observed_name, json.dumps(payload, sort_keys=True)))
+        self.db.commit()
     def close(self):
         self.db.close()
     def latest(self):

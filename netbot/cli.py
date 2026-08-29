@@ -10,12 +10,13 @@ from .discovery.agent import observe_agent
 from .agent import update_plan, version_state
 from .authority import host_capabilities
 from .bootstrap import bootstrap_plan, bootstrap_eligibility, bootstrap_provider, observe_teardown_capability, execute_live_bootstrap, Eligibility
+from .adoption import adoption_plan, apply_adoption
 from .state import State
 from .reconcile import now
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("command",choices=["status","topology","discover","diff","reconcile","inspect","access","bindings","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","enroll"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("command",choices=["status","topology","discover","diff","reconcile","inspect","access","bindings","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.command == "enroll":
         if len(raw_argv) != 1:
             p.error("usage: netbot enroll")
@@ -65,6 +66,19 @@ def main(argv=None):
         state.bootstrap_observation(now(), target, plan)
         state.close()
         print(json.dumps(plan, indent=2)); return
+    if a.command == "adopt":
+        action = a.host or "plan"
+        if action not in {"plan", "apply"} or not a.target or not a.topology_identity:
+            p.error("usage: netbot adopt {plan|apply} OBSERVED-NODE --as TOPOLOGY-ID")
+        result = reconcile(a.config, a.db, Path.home(), "adoption-plan")
+        plan = adoption_plan(result, a.target, a.topology_identity)
+        if action == "plan" or a.dry_run:
+            print(json.dumps(plan, indent=2)); return
+        current = reconcile(a.config, a.db, Path.home(), "adoption-apply-reobserve")
+        applied = apply_adoption(a.config, plan, current)
+        if applied.get("state") == "adopted":
+            state = State(a.db); state.adoption_event(now(), a.topology_identity, plan["observed"]["node_id"], plan["observed"]["hostname"], {"source":"explicit human-authorized adoption"}); state.close()
+        print(json.dumps({"plan": plan, "result": applied}, indent=2)); return
     if a.command=="agent":
         action=a.host or "status"
         _, desired=load_topology(a.config); settings=load_agent_settings(a.config)

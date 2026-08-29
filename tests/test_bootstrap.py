@@ -16,6 +16,7 @@ from netbot.bootstrap import (
 )
 from netbot.tailscale_prefs import TailscalePreferenceObserver, parse_preference
 from netbot.state import State
+from netbot.adoption import adoption_plan, apply_adoption
 
 
 class BootstrapTests(unittest.TestCase):
@@ -241,6 +242,56 @@ class BootstrapTests(unittest.TestCase):
     def test_managed_access_does_not_adopt_unbound_topology(self):
         result = adoption_decision(identity=None, identity_status="unbound", ordinary_openssh={"result":"authenticated"}, tailscale_ssh=None, intended_user="zero")
         self.assertEqual(result["state"], "discovered_blocked")
+
+    def test_adoption_plan_requires_observed_node_id_and_is_explicit(self):
+        result = {"rows":[{"name":"netbot-test","node_id":"147","addresses":["100.0.0.1"],"os":"linux"}],"desired":[]}
+        plan = adoption_plan(result, "netbot-test", "lab-node")
+        self.assertEqual(plan["state"], "ready")
+        self.assertEqual(plan["proposed"]["node_id"], "147")
+        self.assertTrue(plan["proposed"]["create_identity"])
+        self.assertEqual(plan["action"], "write topology intent only")
+
+    def test_adoption_hostname_alone_or_missing_node_is_blocked(self):
+        self.assertEqual(adoption_plan({"rows":[{"name":"netbot-test"}],"desired":[]}, "netbot-test", "lab")["state"], "blocked")
+        self.assertEqual(adoption_plan({"rows":[],"desired":[]}, "netbot-test", "lab")["state"], "blocked")
+
+    def test_adoption_conflicts_fail_closed(self):
+        desired = [SimpleNamespace(identity="other", attrs={"bindings":{"tailscale":{"node_id":"147"}}}), SimpleNamespace(identity="retired", attrs={"lifecycle":"retired"})]
+        result = {"rows":[{"name":"netbot-test","node_id":"147","addresses":[]}],"desired":desired}
+        self.assertEqual(adoption_plan(result, "netbot-test", "new")["state"], "blocked")
+        self.assertIn("other", adoption_plan(result, "netbot-test", "new")["conflicts"][0])
+        self.assertEqual(adoption_plan({"rows":[{"name":"netbot-test","node_id":"147","addresses":[]}],"desired":desired}, "netbot-test", "retired")["state"], "blocked")
+
+    def test_adoption_apply_is_idempotent_and_records_only_topology_file(self):
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / "topology.yaml"; config.write_text("version: 1\nhosts:\n  existing:\n    class: core\n")
+            result = {"rows":[{"name":"netbot-test","node_id":"147","addresses":[]}],"desired":[]}
+            plan = adoption_plan(result, "netbot-test", "lab-node")
+            applied = apply_adoption(config, plan, result)
+            self.assertEqual(applied["state"], "adopted")
+            self.assertIn('node_id: "147"', config.read_text())
+            version, hosts = __import__('netbot.config', fromlist=['load_topology']).load_topology(config)
+            self.assertEqual(next(h for h in hosts if h.identity == "lab-node").attrs["bindings"]["tailscale"]["node_id"], "147")
+            reapplied = apply_adoption(config, plan, {**result, "desired": hosts})
+            self.assertEqual(reapplied["state"], "already_adopted")
+
+    def test_adoption_stale_plan_is_refused(self):
+        result = {"rows":[{"name":"netbot-test","node_id":"147","addresses":[]}],"desired":[]}
+        plan = adoption_plan(result, "netbot-test", "lab")
+        changed = {"rows":[{"name":"netbot-test","node_id":"999","addresses":[]}],"desired":[]}
+        self.assertEqual(apply_adoption(__import__('pathlib').Path('/tmp/no-write'), plan, changed)["state"], "stale_plan")
+
+    def test_adoption_history_is_explicit_and_node_anchored(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            state = State(Path(d) / "state.db")
+            state.adoption_event("now", "lab-node", "147", "netbot-test")
+            row = state.db.execute("SELECT topology_identity,node_id,observed_name FROM adoption_events").fetchone()
+            self.assertEqual(tuple(row), ("lab-node", "147", "netbot-test"))
+            state.close()
 
     def test_teardown_failure_is_blocked_not_success(self):
         class Completed:
