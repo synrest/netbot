@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest import mock
 
 from netbot.sync import run_sync
-from netbot.watcher import JSONStreamDecoder, relevant, next_backoff
+from netbot.watcher import JSONStreamDecoder, relevant, next_backoff, watch
+from netbot import service
 
 
 class SyncTests(unittest.TestCase):
@@ -82,6 +83,36 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn("Sockets", plist)
             self.assertEqual(plist["WorkingDirectory"], "/Users/zero/Developer/netbot")
 
+    def test_watcher_launchd_supervision_contract(self):
+        with open(Path(__file__).parents[1] / "launchd" / "com.netbot.watch.plist", "rb") as stream:
+            plist = plistlib.load(stream)
+        self.assertTrue(plist["RunAtLoad"])
+        self.assertEqual(plist["KeepAlive"], {"SuccessfulExit": False})
+        self.assertEqual(plist["ThrottleInterval"], 60)
+        self.assertNotIn("StartInterval", plist)
+        self.assertNotIn("StartCalendarInterval", plist)
+        self.assertNotIn("NetworkState", plist)
+        self.assertNotIn("WatchPaths", plist)
+        self.assertNotIn("PathState", plist)
+
+    @mock.patch.object(service, "launchctl")
+    def test_service_lifecycle_uses_user_launchd_domain(self, launchctl):
+        launchctl.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+        service.start()
+        launchctl.assert_called_with("bootstrap", service.domain(), str(service.plist_path()))
+        service.stop()
+        launchctl.assert_called_with("bootout", f"{service.domain()}/{service.LABEL}")
+
+    @mock.patch.object(service, "launchctl")
+    def test_service_restart_boots_out_then_bootstraps(self, launchctl):
+        launchctl.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+        result = service.restart()
+        self.assertTrue(result["ok"])
+        self.assertEqual([call.args for call in launchctl.call_args_list], [
+            ("bootout", f"{service.domain()}/{service.LABEL}"),
+            ("bootstrap", service.domain(), str(service.plist_path())),
+        ])
+
 
 class WatcherTests(unittest.TestCase):
     def values(self, chunks):
@@ -134,3 +165,10 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(next_backoff(16.0, 0.1), 30.0)
         self.assertEqual(next_backoff(30.0, 0.1), 30.0)
         self.assertEqual(next_backoff(30.0, 10.0), 1.0)
+
+    def test_missing_watcher_executable_is_unrecoverable_nonzero(self):
+        with tempfile.TemporaryDirectory() as d:
+            result = watch(Path(d) / "topology.yaml", Path(d) / "state.sqlite3",
+                           Path(d) / "home", Path(d) / "generated.json",
+                           command="/definitely/missing/tailscale")
+            self.assertEqual(result, 1)

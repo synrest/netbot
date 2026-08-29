@@ -8,8 +8,8 @@
   <key>WorkingDirectory</key><string>/Users/zero/Developer/netbot</string>
   <key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>/Users/zero/Developer/netbot</string><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin</string></dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>10</integer>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>60</integer>
   <key>StandardOutPath</key><string>/Users/zero/Library/Logs/Netbot/watch.log</string>
   <key>StandardErrorPath</key><string>/Users/zero/Library/Logs/Netbot/watch.err.log</string>
 </dict></plist>
