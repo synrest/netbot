@@ -13,14 +13,21 @@ from .bootstrap import bootstrap_plan, bootstrap_eligibility, bootstrap_provider
 from .adoption import adoption_plan, apply_adoption
 from .state import State
 from .reconcile import now
+from .sync import run_sync
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("command",choices=["status","topology","discover","diff","reconcile","inspect","access","bindings","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("command",choices=["status","topology","discover","diff","reconcile","sync","inspect","access","bindings","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.command == "enroll":
         if len(raw_argv) != 1:
             p.error("usage: netbot enroll")
         print("Infrastructure / server:\n  sudo tailscale up --ssh --advertise-tags=tag:netbot-bootstrap\n\nPersonal / end-user:\n  sudo tailscale up --ssh\n\nAlready enrolled:\n  sudo tailscale set --ssh\n\nNetbot will discover the node after it joins the tailnet.")
+        return
+    if a.command == "sync":
+        if a.host or a.target or a.probe or a.dry_run:
+            p.error("usage: netbot sync [--reason REASON]")
+        print(json.dumps(run_sync(a.config, a.db, Path.home(), a.generated,
+                                  reason=a.reason), indent=2))
         return
     if a.command == "bootstrap":
         action = a.host or "status"
