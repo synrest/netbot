@@ -10,7 +10,8 @@ archive = root / "dist" / f"netbot-{version}.zip"
 archive.parent.mkdir(exist_ok=True)
 include = [pathlib.Path("README.md"), pathlib.Path("pyproject.toml"), pathlib.Path("install.sh"),
            pathlib.Path("uninstall.sh"), pathlib.Path("netbot"), pathlib.Path("config/topology.yaml"),
-           pathlib.Path("launchd/com.netbot.watch.plist")]
+           pathlib.Path("launchd/com.netbot.watch.plist"), pathlib.Path("systemd/netbot-watch.service"),
+           pathlib.Path("openrc/netbot-watch")]
 files = []
 for item in include:
     source = root / item
@@ -23,7 +24,7 @@ with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
         rel = pathlib.Path(f"netbot-{version}") / source.relative_to(root)
         info = zipfile.ZipInfo(rel.as_posix(), (1980, 1, 1, 0, 0, 0))
         info.compress_type = zipfile.ZIP_DEFLATED
-        mode = 0o100755 if source.suffix == ".sh" else 0o100644
+        mode = 0o100755 if source.suffix == ".sh" or source.parent.name == "openrc" else 0o100644
         info.external_attr = mode << 16
         zf.writestr(info, source.read_bytes())
 digest = hashlib.sha256(archive.read_bytes()).hexdigest()

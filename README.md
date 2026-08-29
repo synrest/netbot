@@ -26,15 +26,15 @@ Netbot v1 has a hard dependency on Tailscale. Tailscale supplies network identit
 
 Service managers are deployment/process-lifetime adapters, not core Netbot architecture. Netbot remains runnable without launchd, systemd, or OpenRC through `netbot sync` and `netbot-watch`. The current macOS launchd integration is supported for login/reboot startup, watcher crash restart, and the optional `:00`/`:30` correctness fallback; periodic scheduling is not required for core correctness.
 
-Phase 7 launchd artifacts are provided as a macOS deployment adapter. Production installation installs only the watcher LaunchAgent using the safe supervision contract; the legacy `com.netbot.sync` `:00`/`:30` job is not installed by default. Service managers are not part of the reconciliation core.
+Phase 7 launchd artifacts are provided as a macOS deployment adapter. Production installation installs only the watcher LaunchAgent using the safe supervision contract; the legacy `com.netbot.sync` `:00`/`:30` job is not installed by default. On Linux, installation detects a systemd user manager or OpenRC from live capabilities and uses the matching watcher adapter. Service managers are not part of the reconciliation core.
 
 The retired local webhook spike measured approximately 15 MB RSS for a persistent receiver and approximately 32 MB for the Python-plus-Tailscale IPN wrapper. It confirmed that a public HTTP/Funnel path is unnecessary for local discovery; IPN is an optimization and calendar/manual sync remain the correctness paths.
 
 Phase 1 performs no remote SSH commands and no Tailscale writes. It reads the local SSH configuration and public-key metadata only.
 
-The supported Python baseline is 3.10+. SSH access probes are explicit (`netbot access` or `netbot inspect HOST --probe`); routine status and reconciliation do not probe remote hosts.
+The supported Python baseline is 3.10+, including the platform's `venv`/`ensurepip` component required by the installer (often packaged separately as `python3-venv` on Debian). SSH access probes are explicit (`netbot access` or `netbot inspect HOST --probe`); routine status and reconciliation do not probe remote hosts.
 
-Netbot 0.2.0 supports two deployment modes. For development, clone the repository and run `./install.sh --dev`. For production, unpack a versioned `netbot-X.Y.Z.zip` and run `./install.sh`; Git and the extracted source tree are not required afterward. The installer keeps a private per-user runtime under `~/Library/Application Support/Netbot/`, with stable wrappers in `~/.local/bin/`, so users do not need to activate a virtual environment or configure import paths.
+Netbot 0.3.0 supports two deployment modes. For development, clone the repository and run `./install.sh --dev`. For production, unpack a versioned `netbot-X.Y.Z.zip` and run `./install.sh`; Git and the extracted source tree are not required afterward. The installer keeps a private per-user runtime under `~/Library/Application Support/Netbot/`, with stable wrappers in `~/.local/bin/`, so users do not need to activate a virtual environment or configure import paths.
 
 Production installation preserves `config/topology.yaml` and `state/netbot.sqlite3` outside versioned runtime directories. Reinstalling switches the private runtime without deleting desired topology or history. `./uninstall.sh` removes only Netbot runtime integration, wrappers, installed versions, transient runtime files, and logs; it retains configuration and state, the user's SSH configuration/keys, Tailscale, and remote hosts.
 
@@ -43,6 +43,8 @@ Use `netbot --version`, `netbot doctor`, and `netbot service status` to verify a
 `agent-temporary` remains a separate project and lifecycle. Netbot does not require it for OBSERVE or MANAGE. It is optional target-side infrastructure for bounded MAINTAIN authority after explicit human activation; Netbot may observe and lower that authority but never raises it or activates it.
 
 Release archives are built with `./scripts/build-release.sh` and produce `dist/netbot-X.Y.Z.zip` plus a SHA-256 sidecar. Archives exclude Git metadata, caches, local databases, generated output, logs, virtual environments, and private credentials. `agent-temporary` is never bundled.
+
+On Linux, a systemd user manager installs `~/.config/systemd/user/netbot-watch.service` with `Restart=on-failure` and `RestartSec=60s`; user-session startup is the default and `loginctl enable-linger` is never enabled automatically. OpenRC has no assumed unprivileged per-user service domain, so installation prepares a reviewed `supervise-daemon` script and reports the explicit administrator action required to place it in `/etc/init.d/`, enable it, and start it. OpenRC 0.63's default respawn-delay cap is 30 seconds, so that adapter uses a bounded 30-second retry delay. The core install remains unprivileged.
 
 `netbot agent status HOST` performs a read-only SSH observation of agent-temporary and effective `sudo -n -l`. It does not enable, disable, or execute privileged commands.
 

@@ -18,7 +18,7 @@ ROOT = Path(__file__).parents[1]
 
 class DeploymentTests(unittest.TestCase):
     def test_version_is_consistent(self):
-        self.assertEqual(__version__, "0.2.0")
+        self.assertEqual(__version__, "0.3.0")
         self.assertIn(__version__, (ROOT / "pyproject.toml").read_text())
 
     def test_installed_plist_has_no_source_checkout_dependency(self):
@@ -63,9 +63,28 @@ class DeploymentTests(unittest.TestCase):
             self.assertIn(prefix + "install.sh", names)
             self.assertIn(prefix + "config/topology.yaml", names)
             self.assertIn(prefix + "netbot/cli.py", names)
+            self.assertIn(prefix + "systemd/netbot-watch.service", names)
+            self.assertIn(prefix + "openrc/netbot-watch", names)
             self.assertNotIn(prefix + "state/netbot.sqlite3", names)
             self.assertFalse(any("__pycache__" in name or ".git/" in name for name in names))
             self.assertTrue((archive.with_suffix(".zip.sha256")).is_file())
         finally:
             archive.unlink(missing_ok=True)
             archive.with_suffix(".zip.sha256").unlink(missing_ok=True)
+
+    def test_linux_supervisor_templates_have_bounded_restart_contract(self):
+        systemd = (ROOT / "systemd/netbot-watch.service").read_text()
+        self.assertIn("Restart=on-failure", systemd)
+        self.assertIn("RestartSec=60s", systemd)
+        self.assertNotIn("Restart=always", systemd)
+        openrc = (ROOT / "openrc/netbot-watch").read_text()
+        self.assertIn('supervisor="supervise-daemon"', openrc)
+        self.assertIn("respawn_delay=30", openrc)
+        self.assertIn("respawn_max=5", openrc)
+
+    def test_service_backend_detection_is_capability_based(self):
+        with mock.patch.object(service.sys, "platform", "linux"), \
+             mock.patch.object(service.shutil, "which", side_effect=lambda name: "/usr/bin/systemctl" if name == "systemctl" else None), \
+             mock.patch.object(service.Path, "exists", return_value=True), \
+             mock.patch.object(service.subprocess, "run", return_value=mock.Mock(returncode=0)):
+            self.assertEqual(service.detect_backend(), "systemd")

@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .service import status as service_status
+from .service import detect_backend, status as service_status
 from .version import __version__
 
 
@@ -25,6 +25,7 @@ def check(label: str, ok: bool, detail: str, warning: bool = False) -> dict:
 
 def diagnose() -> dict:
     prefix = install_prefix()
+    backend = detect_backend()
     checks = [check("python", sys.version_info >= (3, 10), platform.python_version()),
               check("tailscale", bool(shutil.which("tailscale")), shutil.which("tailscale") or "not found"),
               check("ssh", bool(shutil.which("ssh")), shutil.which("ssh") or "not found"),
@@ -42,16 +43,20 @@ def diagnose() -> dict:
     config = prefix / "config" / "topology.yaml"
     state = prefix / "state"
     runtime = prefix / "run"
-    logs = Path.home() / "Library" / "Logs" / "Netbot"
+    logs = (Path.home() / "Library" / "Logs" / "Netbot" if sys.platform == "darwin"
+            else prefix / "logs")
     checks.extend([check("topology", config.is_file(), str(config)),
                    check("state", state.exists() and os.access(state, os.R_OK | os.W_OK), str(state)),
                    check("runtime", runtime.exists() and os.access(runtime, os.R_OK | os.W_OK), str(runtime)),
                    check("logs", logs.exists() and os.access(logs, os.R_OK | os.W_OK), str(logs))])
-    if sys.platform == "darwin" and shutil.which("launchctl"):
+    if backend in {"launchd", "systemd", "openrc"}:
         service = service_status()
-        checks.append(check("watcher-service", service["loaded"] and service["watcher"],
-                            f"loaded={service['loaded']} running={service['running']} pid={service['pid']}"))
+        checks.append(check("supervisor", True, backend))
+        checks.append(check("watcher-service", service.get("loaded", False) and service.get("watcher", False),
+                            f"backend={backend} loaded={service.get('loaded')} running={service.get('running')} pid={service.get('pid')}",
+                            warning=backend == "openrc" and not service.get("installed", False)))
     else:
-        checks.append(check("watcher-service", False, "launchd unavailable", warning=True))
+        checks.append(check("supervisor", False, "unsupported supervisor"))
+        checks.append(check("watcher-service", False, "not installed", warning=True))
     return {"version": __version__, "python": platform.python_version(),
-            "install_prefix": str(prefix), "checks": checks}
+            "install_prefix": str(prefix), "backend": backend, "checks": checks}

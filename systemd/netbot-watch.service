@@ -1,0 +1,12 @@
+[Unit]
+Description=Netbot Tailscale IPN watcher
+
+[Service]
+Type=exec
+ExecStart=__NETBOT_BIN__/netbot-watch
+WorkingDirectory=__NETBOT_PREFIX__
+Restart=on-failure
+RestartSec=60s
+
+[Install]
+WantedBy=default.target

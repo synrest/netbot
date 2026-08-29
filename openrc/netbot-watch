@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+name="netbot-watch"
+command="__NETBOT_BIN__/netbot-watch"
+command_background="true"
+supervisor="supervise-daemon"
+# OpenRC 0.63 caps this delay at 30 seconds by default.
+respawn_delay=30
+respawn_max=5
+respawn_period=600
+
+depend() {
+    need localmount
+}
