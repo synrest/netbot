@@ -18,10 +18,11 @@ from .service import start as service_start, stop as service_stop, restart as se
 from .doctor import diagnose
 from .version import __version__
 from .snapshot import build_snapshot, compare_snapshot, persist_snapshot, export_snapshot, fetch_snapshot, resolve_authority
+from .discovery.remote_ssh import inspect_target
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","diff","reconcile","sync","inspect","access","bindings","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","diff","reconcile","sync","inspect","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.command == "enroll":
         if len(raw_argv) != 1:
             p.error("usage: netbot enroll")
@@ -42,6 +43,11 @@ def main(argv=None):
             p.error("usage: netbot sync [--reason REASON]")
         print(json.dumps(run_sync(a.config, a.db, Path.home(), a.generated,
                                   reason=a.reason), indent=2))
+        return
+    if a.command == "ssh":
+        if a.host != "inspect-target" or not a.target or not a.candidate:
+            p.error("usage: netbot ssh inspect-target TARGET CANDIDATE")
+        print(json.dumps(inspect_target(str(a.config), a.target, a.candidate).as_dict(), indent=2, sort_keys=True))
         return
     if a.command == "service":
         actions = {"start": service_start, "stop": service_stop,
