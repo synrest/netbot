@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from .config import load_topology
+from .config import load_topology, load_topology_authority
+from .snapshot import build_snapshot, local_machine_identity
 from .discovery.tailscale import discover, short_dns_name
 from .discovery.ssh import inspect_ssh, public_key_inventory, classify_aliases, effective_config, probe_ssh, probe_endpoint, known_host_fingerprints
 from .state import State
@@ -24,8 +25,16 @@ def identity_match(desired, node):
     return None, None, "unknown", False
 
 def reconcile(config: Path, db_path: Path, home: Path, reason="cli", probe=False, selected_path=None, selected_identity=None, probe_user=None):
-    _, desired = load_topology(config); state=State(db_path); state.save_desired(desired)
-    started=now(); run=state.begin(started,reason); nodes,error=discover(); ssh,includes=inspect_ssh(home)
+    _, desired = load_topology(config)
+    state=State(db_path); started=now(); run=state.begin(started,reason); nodes,error=discover()
+    current_identity=local_machine_identity(config,nodes)
+    local_snapshot = build_snapshot(config)
+    topology = {"state":"OK", "source":"local-controller",
+                "authority":load_topology_authority(config) or current_identity,
+                "effective_hash":local_snapshot["content_hash"], "accepted_at":None,
+                "fetch_state":"not-applicable", "desired":desired}
+    state.save_desired(desired)
+    ssh,includes=inspect_ssh(home)
     observer_status = "observer-unavailable" if error else "available"
     by_name={x.identity:x for x in desired}; matched=set(); rows=[]; changes=[]; event_candidates=[]; unknown=[]; migration_candidates=[]
     for node in nodes:
@@ -114,7 +123,7 @@ def reconcile(config: Path, db_path: Path, home: Path, reason="cli", probe=False
     state.observations(started,rows); state.changes(run,started,events); state.access_observations(started,access_paths)
     state.finish(run,now(),error is None,summary,observer_status,error)
     last=state.latest(); state.close()
-    return {"desired":desired,"nodes":nodes,"ssh":ssh,"ssh_aliases":aliases,"known_hosts":known_hosts,"access_paths":access_paths,"adoption":adoption,"includes":includes,"keys":public_key_inventory(home),"rows":rows,"unknown":unknown,"migration_candidates":migration_candidates,"changes":current_changes,"events":events,"error":error,"observer_status":observer_status,"run_id":run,"summary":summary,"last":last}
+    return {"desired":desired,"nodes":nodes,"controller_identity":controller_identity,"topology":topology,"ssh":ssh,"ssh_aliases":aliases,"known_hosts":known_hosts,"access_paths":access_paths,"adoption":adoption,"includes":includes,"keys":public_key_inventory(home),"rows":rows,"unknown":unknown,"migration_candidates":migration_candidates,"changes":current_changes,"events":events,"error":error,"observer_status":observer_status,"run_id":run,"summary":summary,"last":last}
 
 def migration_plan(result, source, target):
     candidate=next((x for x in result["migration_candidates"] if x["from_identity"]==source and x["to_identity"]==target),None)

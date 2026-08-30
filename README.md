@@ -2,6 +2,8 @@
 
 Netbot is a small, deterministic, read-only topology reconciler. Desired topology lives in `config/topology.yaml`; SQLite stores observations and reconciliation history as a rebuildable cache.
 
+Netbot normally runs on one active controller, currently Arasaka. Managed nodes such as Kiroshi, Orion, and Oracle do not require Netbot; the controller manages them agentlessly through existing infrastructure such as OpenSSH and Tailscale. Additional Netbot installations are optional controller/peer instances for migration, recovery, or testing, not managed-node agents. Netbot is never required for ordinary manual SSH access.
+
 ## Usage
 
 ```sh
