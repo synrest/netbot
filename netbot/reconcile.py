@@ -60,14 +60,29 @@ def reconcile(config: Path, db_path: Path, home: Path, reason="cli", probe=False
                 if candidate: rows.append({"identity":h.identity,"status":"unbound","migration_candidate":candidate})
                 else: rows.append({"identity":h.identity,"status":"absent"}); changes.append({"kind":"expected_absent","identity":h.identity})
     for u in unknown: changes.append({"kind":"unknown_node","identity":None,"node":u})
+    topology_alias_claims={}
+    for host in desired:
+        for alias_name in host.attrs.get("bindings", {}).get("ssh", {}).get("aliases", []):
+            topology_alias_claims.setdefault(alias_name, set()).add(host.identity)
+    for alias_name, owners in sorted(topology_alias_claims.items()):
+        if len(owners) > 1:
+            changes.append({"kind":"topology_ssh_alias_conflict", "identity":None,
+                            "alias":alias_name, "owners":sorted(owners),
+                            "reason":"SSH alias claimed by multiple topology identities"})
     current_changes=list(changes)
     events=[c for c in event_candidates + current_changes if not state.known_change(c)]
     summary={"known":len(matched),"unknown":len(unknown),"absent":len(desired)-len(matched) if not error else 0,"observer_unavailable":len(desired) if error else 0}
+    summary["topology_conflicts"]=sum(1 for owners in topology_alias_claims.values() if len(owners)>1)
     aliases=classify_aliases(ssh,nodes); known_hosts=known_host_fingerprints(home)
+    controller_identity=next((r.get("identity") for r, node in zip(rows, nodes)
+                              if node.raw.get("_netbot_self") and r.get("identity")), None)
     access_paths=[]
+    ssh_identity_by_alias={alias_name: next(iter(owners))
+                          for alias_name, owners in topology_alias_claims.items()
+                          if len(owners) == 1}
     node_by_identity={r.get("identity"):r for r in rows if r.get("identity") and r.get("name")}
     for alias in aliases:
-        identity=alias["alias"] if alias["alias"] in by_name else None
+        identity=ssh_identity_by_alias.get(alias["alias"]) or (alias["alias"] if alias["alias"] in by_name else None)
         path={"identity":identity,"kind":"ssh","name":alias["alias"],"endpoint":f'{alias["target"]}:{alias["port"]}',"user":alias["user"],"source":"existing-ssh-config","classification":alias["classification"],"tested":False,"result":"unknown"}
         path["effective_config"]=effective_config(alias["alias"])
         effective_host=path["effective_config"].get("effective",{}).get("hostname",alias["target"])
@@ -75,7 +90,7 @@ def reconcile(config: Path, db_path: Path, home: Path, reason="cli", probe=False
         path["known_host_keys"]=[entry for entry in known_hosts.get("entries",[]) if entry["host"] in host_candidates]
         if probe:
             path["probe"]=probe_ssh(alias["alias"]); path["tested"]=True; path["result"]=path["probe"]["status"]
-        if identity: access_paths.append(path)
+        access_paths.append(path)
     for identity,node in node_by_identity.items():
         path={"identity":identity,"kind":"tailscale","name":"tailscale","endpoint":node["name"],"user":probe_user,"source":"observed-tailscale","tested":False,"result":"unknown","node_id":node["node_id"],"tailscale_ip":node["addresses"],"eligible":next((x for x in rows if x.get("identity")==identity),{}).get("bootstrap_eligibility",{}).get("state")=="eligible"}
         if probe and selected_path == "tailscale" and identity == selected_identity:

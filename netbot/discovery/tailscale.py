@@ -21,6 +21,7 @@ def normalize_status(payload: dict) -> list[TailscaleNode]:
         value = dict(self_node); value.setdefault("HostName", value.get("Name"))
         last_seen = _first(value, "LastSeen", "LastSeenTime")
         if last_seen and str(last_seen).startswith("0001-"): last_seen = None
+        value["_netbot_self"] = True
         nodes.insert(0, TailscaleNode(str(_first(value, "NodeID", "ID")) if _first(value, "NodeID", "ID") else None,
             _first(value, "HostName", "Name", "DNSName"), _first(value, "DNSName", "DNS"),
             list(_first(value, "TailscaleIPs", "Addresses") or []), value.get("Online", True),

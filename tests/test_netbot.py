@@ -18,6 +18,124 @@ def fixture():
     return {"Self":{"ID":"self","HostName":"arasaka","DNSName":"arasaka.tail","TailscaleIPs":["100.1.1.1"],"Online":True},"Peer":{"n1":{"ID":"n1","HostName":"orion","DNSName":"orion.tail","TailscaleIPs":["100.1.1.2"],"Online":True},"n2":{"ID":"n2","HostName":"mystery","Online":False}}}
 
 class NetbotTests(unittest.TestCase):
+  def ssh_plan_result(self, manual=None, observed=True, classification="tailscale-node"):
+    host = DesiredHost("orion", {"bindings": {"ssh": {"aliases": ["orion"], "user": "lourdes"}}})
+    path = []
+    if manual:
+      path.append({"identity": "orion", "kind": "ssh", "name": "orion", "target": manual.get("hostname", "orion"),
+                   "user": manual.get("user", "lourdes"), "port": manual.get("port", 22), "classification": classification,
+                   "source": "existing-ssh-config", "effective_config": manual.get("effective_config", {
+                       "status": "available", "effective": {"hostname": manual.get("hostname", "orion"),
+                       "user": manual.get("user", "lourdes"), "port": str(manual.get("port", 22))}})})
+    return {"desired": [host], "access_paths": path,
+            "rows": [{"identity": "orion", "name": "orion", "dns_name": "orion.tail", "addresses": ["100.1.1.2"], "status": "present"}] if observed else []}
+
+  def test_ssh_ownership_valid_manual_wins_without_duplicate(self):
+    items = make_ssh_plan(self.ssh_plan_result(manual={"hostname": "orion"}))
+    self.assertEqual(items[0]["status"], "MANUAL")
+    self.assertNotIn("Host orion", render_ssh_plan(items))
+
+  def test_ssh_ownership_absent_manual_generates_candidate(self):
+    items = make_ssh_plan(self.ssh_plan_result())
+    self.assertEqual(items[0]["status"], "CANDIDATE")
+    self.assertIn("Host orion", render_ssh_plan(items))
+    self.assertNotIn("IdentityFile", render_ssh_plan(items))
+
+  def test_ssh_ownership_broken_manual_is_conflict_and_untouched(self):
+    broken = {"effective_config": {"status": "unknown", "error": "ssh -G failed", "effective": {}}}
+    items = make_ssh_plan(self.ssh_plan_result(manual=broken))
+    self.assertEqual(items[0]["status"], "CONFLICT")
+    self.assertNotIn("Host orion", render_ssh_plan(items))
+    self.assertEqual(broken["effective_config"]["status"], "unknown")
+
+  def test_unrelated_manual_ssh_configuration_is_observed_not_rendered(self):
+    result = self.ssh_plan_result()
+    result["access_paths"].append({"identity": None, "kind": "ssh", "name": "bastion", "target": "jump.example",
+                                    "source": "existing-ssh-config", "classification": "unknown",
+                                    "effective_config": {"status": "available", "effective": {"hostname": "jump.example"}}})
+    items = make_ssh_plan(result)
+    self.assertNotIn("bastion", render_ssh_plan(items))
+
+  def test_ssh_generated_output_is_deterministic_and_idempotent(self):
+    result = self.ssh_plan_result()
+    first = render_ssh_plan(make_ssh_plan(result))
+    second = render_ssh_plan(make_ssh_plan(result))
+    self.assertEqual(first, second)
+
+  def test_ssh_planning_does_not_mutate_keys_known_hosts_or_tailscale(self):
+    with tempfile.TemporaryDirectory() as d:
+      root = Path(d); ssh = root / ".ssh"; ssh.mkdir()
+      files = {name: "original\n" for name in ("authorized_keys", "known_hosts", "id_ed25519", "id_ed25519.pub")}
+      for name, contents in files.items(): (ssh / name).write_text(contents)
+      before = {name: (ssh / name).read_bytes() for name in files}
+      render_ssh_plan(make_ssh_plan(self.ssh_plan_result()))
+      self.assertEqual(before, {name: (ssh / name).read_bytes() for name in files})
+
+  def test_ssh_local_forwarded_route_is_not_portable_candidate(self):
+    result = self.ssh_plan_result(manual={"hostname": "127.0.0.1", "port": 2222}, classification="local-forwarded-or-child")
+    items = make_ssh_plan(result)
+    self.assertEqual(items[0]["status"], "MANUAL")
+    self.assertIn("controller-relative", items[0]["reason"])
+
+  def route_plan_result(self, controller="arasaka", hostname=None):
+    ssh = {"aliases": ["mikoshi"], "user": "zero"}
+    if hostname is not None:
+      ssh.update({"hostname": hostname, "port": 2222, "controller": controller})
+    return {"desired": [DesiredHost("mikoshi", {"bindings": {"ssh": ssh}})],
+            "access_paths": [], "controller_identity": controller,
+            "rows": [{"identity": "mikoshi", "name": "mikoshi", "dns_name": "mikoshi.tail",
+                       "addresses": ["100.1.1.3"], "status": "present"}]}
+
+  def test_duplicate_topology_alias_ownership_is_deterministic_conflict(self):
+    result = self.ssh_plan_result()
+    result["desired"].append(DesiredHost("other", {"bindings": {"ssh": {"aliases": ["orion"], "user": "other"}}}))
+    items = make_ssh_plan(result)
+    conflicts = [item for item in items if item["alias"] == "orion"]
+    self.assertEqual([item["status"] for item in conflicts], ["TOPOLOGY CONFLICT", "TOPOLOGY CONFLICT"])
+    self.assertNotIn("Host orion", render_ssh_plan(items))
+    self.assertEqual(render_ssh_plan(items), render_ssh_plan(make_ssh_plan(result)))
+
+  def test_duplicate_topology_alias_is_visible_in_reconcile_diff(self):
+    with tempfile.TemporaryDirectory() as d:
+      root = Path(d); cfg = root / "topology.yaml"
+      cfg.write_text("version: 1\nhosts:\n  one:\n    bindings:\n      ssh:\n        aliases: [shared]\n        user: zero\n  two:\n    bindings:\n      ssh:\n        aliases: [shared]\n        user: zero\n")
+      import netbot.reconcile as reconcile_module
+      old = reconcile_module.discover
+      reconcile_module.discover = lambda: ([], None)
+      try:
+        home = root / "home"; (home / ".ssh").mkdir(parents=True); (home / ".ssh" / "config").write_text("")
+        result = reconcile(cfg, root / "state.sqlite3", home)
+        self.assertEqual(result["summary"]["topology_conflicts"], 1)
+        self.assertTrue(any(change["kind"] == "topology_ssh_alias_conflict" for change in result["changes"]))
+        again = reconcile(cfg, root / "state.sqlite3", home)
+        self.assertEqual(result["changes"], again["changes"])
+      finally:
+        reconcile_module.discover = old
+
+  def test_direct_observed_route_is_portable_candidate(self):
+    item = make_ssh_plan(self.route_plan_result())[0]
+    self.assertEqual(item["status"], "CANDIDATE")
+    self.assertEqual(item["entry"]["hostname"], "mikoshi")
+
+  def test_machine_local_forwarded_route_renders_only_on_declared_controller(self):
+    same = make_ssh_plan(self.route_plan_result("arasaka", "127.0.0.1"))[0]
+    other = make_ssh_plan(dict(self.route_plan_result("kiroshi", "127.0.0.1"), controller_identity="arasaka"))[0]
+    self.assertEqual(same["status"], "CANDIDATE")
+    self.assertEqual(same["entry"]["hostname"], "127.0.0.1")
+    self.assertEqual(other["status"], "BLOCKED")
+    self.assertNotIn("Host mikoshi", render_ssh_plan([other]))
+
+  def test_localhost_without_controller_is_not_globally_portable(self):
+    result = self.route_plan_result(hostname="127.0.0.1")
+    result["desired"][0].attrs["bindings"]["ssh"].pop("controller")
+    item = make_ssh_plan(result)[0]
+    self.assertEqual(item["status"], "BLOCKED")
+    self.assertIn("no explicit controller", item["reason"])
+
+  def test_machine_relative_rendering_does_not_synthesize_proxyjump(self):
+    text = render_ssh_plan(make_ssh_plan(self.route_plan_result("arasaka", "127.0.0.1")))
+    self.assertNotIn("ProxyJump", text)
+
   def test_enroll_is_informational_only(self):
     from contextlib import redirect_stdout
     from io import StringIO
