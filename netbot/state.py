@@ -27,6 +27,61 @@ class State:
     def save_desired(self, hosts):
         self.db.execute("DELETE FROM hosts")
         self.db.executemany("INSERT OR REPLACE INTO hosts VALUES (?,?)", [(h.identity, json.dumps(h.attrs, sort_keys=True)) for h in hosts]); self.db.commit()
+    def save_topology_snapshot(self, snapshot):
+        self.db.execute("CREATE TABLE IF NOT EXISTS topology_snapshots(id INTEGER PRIMARY KEY CHECK(id=1), content_hash TEXT NOT NULL, snapshot_json TEXT NOT NULL, generated_at TEXT NOT NULL)")
+        payload = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        self.db.execute("BEGIN")
+        try:
+            self.db.execute("INSERT INTO topology_snapshots(id,content_hash,snapshot_json,generated_at) VALUES (1,?,?,?) ON CONFLICT(id) DO UPDATE SET content_hash=excluded.content_hash,snapshot_json=excluded.snapshot_json,generated_at=excluded.generated_at", (snapshot["content_hash"], payload, snapshot["generated_at"]))
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return snapshot
+    def latest_topology_snapshot(self):
+        try:
+            row = self.db.execute("SELECT snapshot_json FROM topology_snapshots WHERE id=1").fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return json.loads(row[0]) if row else None
+    def save_accepted_topology_snapshot(self, snapshot, source_identity, transport, accepted_at=None):
+        from datetime import datetime, timezone
+        accepted_at = accepted_at or datetime.now(timezone.utc).isoformat()
+        self.db.execute("CREATE TABLE IF NOT EXISTS accepted_topology_snapshots(id INTEGER PRIMARY KEY CHECK(id=1), source_identity TEXT NOT NULL, content_hash TEXT NOT NULL, transport TEXT NOT NULL, accepted_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)")
+        payload = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        self.db.execute("BEGIN")
+        try:
+            self.db.execute("INSERT INTO accepted_topology_snapshots(id,source_identity,content_hash,transport,accepted_at,snapshot_json) VALUES (1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET source_identity=excluded.source_identity,content_hash=excluded.content_hash,transport=excluded.transport,accepted_at=excluded.accepted_at,snapshot_json=excluded.snapshot_json", (source_identity, snapshot["content_hash"], transport, accepted_at, payload))
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+    def latest_accepted_topology_snapshot(self):
+        try:
+            row = self.db.execute("SELECT source_identity,content_hash,transport,accepted_at,snapshot_json FROM accepted_topology_snapshots WHERE id=1").fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if not row:
+            return None
+        try:
+            snapshot = json.loads(row[4])
+        except (TypeError, json.JSONDecodeError) as exc:
+            return {"source_identity": row[0], "content_hash": row[1], "transport": row[2],
+                    "accepted_at": row[3], "snapshot": None, "invalid": True,
+                    "reason": "accepted snapshot JSON is invalid: " + str(exc)}
+        return {"source_identity": row[0], "content_hash": row[1], "transport": row[2], "accepted_at": row[3], "snapshot": snapshot}
+    def save_topology_fetch_status(self, result, checked_at=None):
+        from datetime import datetime, timezone
+        checked_at = checked_at or datetime.now(timezone.utc).isoformat()
+        self.db.execute("CREATE TABLE IF NOT EXISTS topology_fetch_status(id INTEGER PRIMARY KEY CHECK(id=1), checked_at TEXT NOT NULL, result TEXT NOT NULL, authority TEXT, reason TEXT, remote_hash TEXT)")
+        self.db.execute("INSERT INTO topology_fetch_status(id,checked_at,result,authority,reason,remote_hash) VALUES (1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET checked_at=excluded.checked_at,result=excluded.result,authority=excluded.authority,reason=excluded.reason,remote_hash=excluded.remote_hash", (checked_at, result.get("result", "UNKNOWN"), result.get("authority"), result.get("reason"), result.get("remote_hash")))
+        self.db.commit()
+    def latest_topology_fetch_status(self):
+        try:
+            row = self.db.execute("SELECT checked_at,result,authority,reason,remote_hash FROM topology_fetch_status WHERE id=1").fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return {"checked_at": row[0], "result": row[1], "authority": row[2], "reason": row[3], "remote_hash": row[4]} if row else None
     def begin(self, started, reason):
         cur=self.db.execute("INSERT INTO reconciliations(started_at,reason) VALUES (?,?)",(started,reason)); self.db.commit(); return cur.lastrowid
     def finish(self, run_id, completed, success, summary, observer_status, observer_error):

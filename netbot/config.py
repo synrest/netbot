@@ -48,6 +48,16 @@ def load_topology(path: Path) -> tuple[int, list[DesiredHost]]:
     return version, hosts
 
 
+def load_topology_authority(path: Path) -> str | None:
+    """Read the single explicit snapshot authority identity, if declared."""
+    for raw in path.read_text().splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if line and len(line) - len(line.lstrip()) == 0 and line.startswith("authority:"):
+            value = _scalar(line.split(":", 1)[1])
+            return str(value) if value is not None else None
+    return None
+
+
 def load_agent_settings(path: Path) -> dict:
     """Read the intentionally small global agent settings subset."""
     settings = {}

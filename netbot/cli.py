@@ -17,10 +17,11 @@ from .sync import run_sync
 from .service import start as service_start, stop as service_stop, restart as service_restart, status as service_status
 from .doctor import diagnose
 from .version import __version__
+from .snapshot import build_snapshot, compare_snapshot, persist_snapshot, export_snapshot, fetch_snapshot, resolve_authority
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","diff","reconcile","sync","inspect","access","bindings","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","diff","reconcile","sync","inspect","access","bindings","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.command == "enroll":
         if len(raw_argv) != 1:
             p.error("usage: netbot enroll")
@@ -133,6 +134,36 @@ def main(argv=None):
             print(json.dumps(update_plan(a.target,desired_version,observation,ssh_observed=True if observation.get("status")=="available" else None),indent=2)); return
         p.error("usage: netbot agent status [HOST] or netbot agent update HOST --dry-run")
     if a.command=="topology":
+        if a.host == "snapshot":
+            if a.target:
+                p.error("usage: netbot topology snapshot")
+            state = State(a.db)
+            if a.export:
+                snapshot = export_snapshot(state)
+                authority, _ = resolve_authority(a.config)
+                if snapshot is None or authority is None:
+                    print(json.dumps({"error": "no persisted snapshot or explicit authority available"}, sort_keys=True))
+                    state.close()
+                    return
+                print(json.dumps({"source_authority": authority["identity"], "snapshot": snapshot}, ensure_ascii=False, sort_keys=True))
+                state.close()
+                return
+            previous = state.latest_topology_snapshot()
+            snapshot = build_snapshot(a.config)
+            comparison = compare_snapshot(snapshot, previous)
+            persist_snapshot(state, snapshot)
+            state.close()
+            print(json.dumps({"schema": snapshot["schema"], "version": snapshot["version"], "content_hash": snapshot["content_hash"],
+                              "comparison": comparison, "generated_at": snapshot["generated_at"]}, indent=2))
+            return
+        if a.host == "fetch":
+            if a.target or a.export:
+                p.error("usage: netbot topology fetch")
+            state = State(a.db)
+            result = fetch_snapshot(a.config, state)
+            state.close()
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
         version,hosts=load_topology(a.config); print(json.dumps({"version":version,"hosts":[{"identity":h.identity,**h.attrs} for h in hosts]},indent=2)); return
     if a.command=="bindings":
         _,hosts=load_topology(a.config); print(json.dumps([{"identity":h.identity,"binding":h.attrs.get("bindings",{}),"provenance":"explicit topology binding" if h.attrs.get("bindings") else "none"} for h in hosts],indent=2)); return
