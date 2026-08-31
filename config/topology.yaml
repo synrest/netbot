@@ -33,6 +33,7 @@ hosts:
       ssh:
         aliases:
           - kiroshi
+        user: rafael
   mikoshi:
     class: core
     bindings:
@@ -42,6 +43,7 @@ hosts:
       ssh:
         aliases:
           - mikoshi
+        user: zero
   orion:
     class: satellite
     kind: physical
@@ -78,6 +80,7 @@ hosts:
       ssh:
         aliases:
           - oracle
+        user: rafael
   netbot-test:
     class: unknown
     bindings:
