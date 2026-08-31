@@ -22,6 +22,7 @@ from .discovery.remote_ssh import inspect_target
 from .discovery.tailscale import discover
 from .target_view import build_ssh_view
 from .peer_policy import expected_peers, load_peer_policy, PolicyValidationError
+from .render_target import render_target
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -83,7 +84,16 @@ def main(argv=None):
                 payload["peer_policy"] = "DECLARED"
             print(json.dumps(payload, indent=2, sort_keys=True))
             return
-        p.error("usage: netbot ssh {inspect-target TARGET CANDIDATE|diff-target TARGET}")
+        if a.host == "render-target":
+            if not a.target or a.candidate:
+                p.error("usage: netbot ssh render-target TARGET")
+            result = render_target(a.config, a.target)
+            if result.state == "RENDERABLE":
+                print(result.text, end="")
+            else:
+                print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+            return
+        p.error("usage: netbot ssh {inspect-target TARGET CANDIDATE|diff-target TARGET|render-target TARGET}")
         return
     if a.command == "service":
         actions = {"start": service_start, "stop": service_stop,
