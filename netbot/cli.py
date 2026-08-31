@@ -97,7 +97,7 @@ def main(argv=None):
         if a.host == "apply-target":
             if not a.target:
                 p.error("usage: netbot ssh apply-target TARGET [--dry-run]")
-            plan = build_apply_plan(a.config, a.target)
+            plan = build_apply_plan(a.config, a.target, db_path=a.db)
             if a.dry_run:
                 print(json.dumps(plan.as_dict(), indent=2, sort_keys=True))
             else:

@@ -81,6 +81,28 @@ class ApplyTargetTests(unittest.TestCase):
                 again = build_apply_plan(path, "kiroshi", runner=remote)
             self.assertEqual(plan.desired_content, again.desired_content)
 
+    def test_verified_bootstrap_transport_bridges_missing_alias(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.config(Path(d)); remote = RemoteFiles()
+            transport = {
+                "endpoint": "netbot-test", "user": "zero", "port": 22,
+                "identity_file": "/tmp/controller-key",
+                "known_hosts_file": "/tmp/verified-host-keys",
+                "host_keys": [{"key_type": "ssh-ed25519", "key_data": "AAAA"}],
+                "source": "verified-bootstrap-ordinary-ssh",
+            }
+            with patch("netbot.apply_target._bootstrap_transport", return_value=transport), \
+                 patch("netbot.apply_target.build_ssh_view", return_value=view()):
+                plan = build_apply_plan(path, "kiroshi", runner=remote)
+            self.assertEqual(plan.action, "CREATE")
+            self.assertEqual(plan.transport_spec, transport)
+            self.assertNotIn("transport_spec", plan.as_dict())
+            self.assertTrue(all(
+                "-i" in command and "IdentitiesOnly=yes" in command and
+                "StrictHostKeyChecking=yes" in command
+                for command, _ in remote.calls
+            ))
+
     def test_apply_verifies_bytes_and_post_view(self):
         with tempfile.TemporaryDirectory() as d:
             path = self.config(Path(d)); remote = RemoteFiles()

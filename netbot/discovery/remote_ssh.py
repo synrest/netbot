@@ -153,12 +153,26 @@ def _run(
     return completed.stdout, None
 
 
+def _transport_command(transport: dict[str, Any], remote_command: str) -> list[str]:
+    """Build strict ordinary SSH argv for a verified bootstrap transport."""
+    return [
+        "ssh", "-o", "BatchMode=yes", "-o", "PasswordAuthentication=no",
+        "-o", "KbdInteractiveAuthentication=no", "-o", "PreferredAuthentications=publickey",
+        "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
+        "-o", "ConnectTimeout=5", "-o", "ConnectionAttempts=1",
+        "-i", transport["identity_file"],
+        "-o", f"UserKnownHostsFile={transport['known_hosts_file']}",
+        f"{transport['user']}@{transport['endpoint']}", remote_command,
+    ]
+
+
 def inspect_target(
     config_path: str,
     target_identity: str,
     candidate_alias: str,
     *,
     runner: Callable[..., Any] = subprocess.run,
+    transport: dict[str, Any] | None = None,
 ) -> RemoteSSHObservation:
     """Inspect one candidate alias using a topology-bound SSH connection."""
     if not validate_alias(candidate_alias):
@@ -189,7 +203,11 @@ def inspect_target(
         )
 
     transport_alias = target_ssh["aliases"][0]
-    local = effective_config(transport_alias, runner=runner)
+    local = effective_config(transport_alias, runner=runner) if transport is None else {
+        "status": "available", "effective": {
+            "user": transport.get("user"), "port": transport.get("port", 22)
+        }
+    }
     if local.get("status") != "available":
         return RemoteSSHObservation(
             target_identity, transport_alias, local.get("effective", {}).get("user"),
@@ -197,15 +215,12 @@ def inspect_target(
             candidate_alias, "UNKNOWN", {}, "UNAVAILABLE",
             "local SSH binding is unavailable",
         )
-    effective_output, reason = _run(
-        runner,
-        [
-            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-            "-o", "ConnectionAttempts=1", transport_alias,
-            "/usr/bin/ssh -G " + _quote(candidate_alias),
-        ],
-        timeout=8,
-    )
+    effective_command = "/usr/bin/ssh -G " + _quote(candidate_alias)
+    effective_argv = _transport_command(transport, effective_command) if transport else [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        "-o", "ConnectionAttempts=1", transport_alias, effective_command,
+    ]
+    effective_output, reason = _run(runner, effective_argv, timeout=8)
     if reason:
         return RemoteSSHObservation(
             target_identity, transport_alias, local.get("effective", {}).get("user"),
@@ -219,15 +234,12 @@ def inspect_target(
             local.get("effective", {}).get("port"),
             candidate_alias, "UNKNOWN", {}, "INVALID", reason,
         )
-    provenance_output, reason = _run(
-        runner,
-        [
-            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-            "-o", "ConnectionAttempts=1", transport_alias,
-            _provenance_command(candidate_alias),
-        ],
-        timeout=8,
-    )
+    provenance_command = _provenance_command(candidate_alias)
+    provenance_argv = _transport_command(transport, provenance_command) if transport else [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        "-o", "ConnectionAttempts=1", transport_alias, provenance_command,
+    ]
+    provenance_output, reason = _run(runner, provenance_argv, timeout=8)
     if reason:
         return RemoteSSHObservation(
             target_identity, transport_alias, local.get("user"), local.get("port"),

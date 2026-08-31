@@ -141,6 +141,7 @@ def build_ssh_view(
     observed=None,
     *,
     runner: Callable[..., Any] = subprocess.run,
+    transport: dict[str, Any] | None = None,
 ) -> SSHView:
     """Build a target-relative view from topology and local observations."""
     _, hosts = load_topology(config_path)
@@ -178,7 +179,7 @@ def build_ssh_view(
                 desired_reason=desired_reason,
             ))
             continue
-        observation = inspect_target(config_path, target_identity, alias, runner=runner)
+        observation = inspect_target(config_path, target_identity, alias, runner=runner, transport=transport)
         unavailable = unavailable or observation.status == "UNAVAILABLE"
         relationship = _relationship(
             host.identity, alias, observation, bindings, target_identity,
