@@ -179,21 +179,40 @@ class BootstrapTests(unittest.TestCase):
         captured = []
 
         class Completed:
-            returncode = 0
-            stdout = "/usr/bin/tailscale set --ssh=false\n"
-            stderr = ""
+            def __init__(self, stdout="", stderr="", returncode=0):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
 
         def runner(command, **kwargs):
             captured.append(command)
-            return Completed()
+            if "--help" in command[-1]:
+                return Completed("usage: tailscale set --ssh=false --help\n")
+            return Completed("/usr/bin/tailscale set --ssh=false\n")
 
         result = observe_teardown_capability("orthanc-db", "zero", runner=runner)
         self.assertEqual(result["state"], "available")
-        command_text = " ".join(captured[0])
-        self.assertIn("sudo", command_text)
-        self.assertIn("-l", command_text)
-        self.assertIn("/usr/bin/tailscale", command_text)
-        self.assertIn("--ssh=false", command_text)
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(captured[0][-1], "sudo -n -l /usr/bin/tailscale set --ssh=false")
+        self.assertEqual(captured[1][-1], "sudo -n /usr/bin/tailscale set --ssh=false --help")
+
+    def test_teardown_observer_does_not_use_aggregate_probe_status(self):
+        calls = []
+
+        class Completed:
+            returncode = 0
+            stdout = "/usr/bin/tailscale set --ssh=false\n"
+            stderr = "diagnostic from help\n"
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            if "--help" in command[-1]:
+                return Completed()
+            return Completed()
+
+        result = observe_teardown_capability("netbot-test", "zero", runner=runner)
+        self.assertEqual(result["state"], "available")
+        self.assertEqual(len(calls), 2)
 
     def test_alpine_sudo_listing_does_not_prove_execution(self):
         self.assertEqual(teardown_capability("(ALL) NOPASSWD: ALL", 1)["state"], "blocked")

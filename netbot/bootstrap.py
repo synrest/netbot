@@ -240,16 +240,26 @@ def teardown_capability(sudo_listing: str, command_result: int | None = None) ->
 
 
 def observe_teardown_capability(host: str, user: str = "zero", runner: Callable = subprocess.run, timeout: int = 8) -> dict[str, Any]:
-    # `--help` exercises the exact executable/subcommand/flag form without
-    # changing Tailscale state.  Listing output is retained only as context.
-    command = tailscale_ssh_command(host, user, "sudo -n -l /usr/bin/tailscale set --ssh=false; sudo -n /usr/bin/tailscale set --ssh=false --help")
-    try: result = runner(command, text=True, capture_output=True, check=False, timeout=timeout)
+    # Keep the advisory listing and the non-mutating exact-form probe as
+    # separate transports.  Combining them in one shell command makes the
+    # aggregate exit status ambiguous: a diagnostic/failure from either leg
+    # can incorrectly hide a successful capability probe.
+    listing_command = tailscale_ssh_command(host, user, "sudo -n -l /usr/bin/tailscale set --ssh=false")
+    help_command = tailscale_ssh_command(host, user, "sudo -n /usr/bin/tailscale set --ssh=false --help")
+    try:
+        listing_result = runner(listing_command, text=True, capture_output=True, check=False, timeout=timeout)
+        help_result = runner(help_command, text=True, capture_output=True, check=False, timeout=timeout)
     except (subprocess.TimeoutExpired, OSError) as exc:
         return {"state": "observer-unavailable", "authority": AUTHORITY_MAINTAIN, "source": "Tailscale SSH sudo inspection", "detail": str(exc)}
-    listing = (result.stdout or "") + (result.stderr or "")
-    if result.returncode != 0 and not listing:
-        return {"state": "observer-unavailable", "authority": AUTHORITY_MAINTAIN, "source": "Tailscale SSH sudo inspection"}
-    return teardown_capability(listing, result.returncode)
+    listing = (listing_result.stdout or "") + (listing_result.stderr or "")
+    help_output = (help_result.stdout or "") + (help_result.stderr or "")
+    if listing_result.returncode != 0:
+        if not listing:
+            return {"state": "observer-unavailable", "authority": AUTHORITY_MAINTAIN, "source": "Tailscale SSH sudo inspection"}
+        return teardown_capability(listing, listing_result.returncode)
+    if help_result.returncode != 0:
+        return teardown_capability(listing + help_output, help_result.returncode)
+    return teardown_capability(listing, 0)
 
 
 def attempt_teardown(host: str, runner: Callable = subprocess.run, timeout: int = 8,
