@@ -51,6 +51,13 @@ def _block(alias: str, hostname: str, user: str, port: int) -> str:
     return f"Host {alias}\n    HostName {hostname}\n    User {user}\n    Port {port}\n"
 
 
+def render_inputs(inputs: tuple[RenderInput, ...] | list[RenderInput]) -> str:
+    """Render already-validated inputs in deterministic alias order."""
+    by_alias = {item.alias: item for item in inputs}
+    return "".join(_block(alias, by_alias[alias].hostname, by_alias[alias].user, by_alias[alias].port)
+                   for alias in sorted(by_alias))
+
+
 def render_target(config_path, target_identity: str) -> TargetRender:
     """Return an exact preview or structured incomplete result; never writes."""
     try:
@@ -108,7 +115,5 @@ def render_target(config_path, target_identity: str) -> TargetRender:
     if errors:
         return TargetRender(target_identity, "INCOMPLETE", inputs=tuple(inputs),
                             reason="one or more expected peers cannot be rendered safely")
-    by_alias = {item.alias: item for item in inputs}
-    text = "".join(_block(alias, by_alias[alias].hostname, by_alias[alias].user, by_alias[alias].port)
-                   for alias in sorted(by_alias))
+    text = render_inputs(inputs)
     return TargetRender(target_identity, "RENDERABLE", text=text, inputs=tuple(inputs))

@@ -23,6 +23,7 @@ from .discovery.tailscale import discover
 from .target_view import build_ssh_view
 from .peer_policy import expected_peers, load_peer_policy, PolicyValidationError
 from .render_target import render_target
+from .apply_target import build_apply_plan, apply_target
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -92,6 +93,15 @@ def main(argv=None):
                 print(result.text, end="")
             else:
                 print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+            return
+        if a.host == "apply-target":
+            if not a.target:
+                p.error("usage: netbot ssh apply-target TARGET [--dry-run]")
+            plan = build_apply_plan(a.config, a.target)
+            if a.dry_run:
+                print(json.dumps(plan.as_dict(), indent=2, sort_keys=True))
+            else:
+                print(json.dumps(apply_target(plan, a.config), indent=2, sort_keys=True))
             return
         p.error("usage: netbot ssh {inspect-target TARGET CANDIDATE|diff-target TARGET|render-target TARGET}")
         return
