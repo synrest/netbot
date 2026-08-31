@@ -21,6 +21,7 @@ from .snapshot import build_snapshot, compare_snapshot, persist_snapshot, export
 from .discovery.remote_ssh import inspect_target
 from .discovery.tailscale import discover
 from .target_view import build_ssh_view
+from .peer_policy import expected_peers, load_peer_policy, PolicyValidationError
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -63,6 +64,24 @@ def main(argv=None):
             if error:
                 view = type(view)(view.target_identity, "UNAVAILABLE", view.relationships, error)
             print(json.dumps(view.as_dict(), indent=2, sort_keys=True))
+            return
+        if a.host == "expected-target":
+            if not a.target or a.candidate:
+                p.error("usage: netbot ssh expected-target TARGET")
+            try:
+                _, desired = load_topology(a.config)
+                policy = load_peer_policy(a.config)
+                result = expected_peers(a.target, desired, policy)
+            except PolicyValidationError as exc:
+                print(json.dumps({"source_identity": a.target, "state": "INVALID_POLICY",
+                                  "reason": str(exc), "peers": [], "excluded": []}, indent=2, sort_keys=True))
+                return
+            payload = result.as_dict()
+            if policy is None:
+                payload["peer_policy"] = "NOT_DECLARED"
+            else:
+                payload["peer_policy"] = "DECLARED"
+            print(json.dumps(payload, indent=2, sort_keys=True))
             return
         p.error("usage: netbot ssh {inspect-target TARGET CANDIDATE|diff-target TARGET}")
         return
