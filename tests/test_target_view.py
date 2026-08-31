@@ -101,6 +101,22 @@ class TargetViewTests(unittest.TestCase):
             self.assertEqual(item.candidate_endpoint, "orion:22")
             self.assertNotIn("ProxyJump", " ".join(" ".join(command) for command in runner.commands))
 
+    def test_managed_fragment_is_valid_managed_not_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            class ManagedRunner(Runner):
+                def __call__(self, command, **kwargs):
+                    self.commands.append(command)
+                    if "/usr/bin/ssh -G" in command[-1]:
+                        effective = EFFECTIVE_ORION.replace("100.100.57.80", "orion").replace("lourdes", "lourdes") if "-G orion" in command[-1] else EFFECTIVE_ARASAKA.replace("100.73.226.72", "arasaka")
+                        return subprocess.CompletedProcess(command, 0, effective, "")
+                    if "NETBOT_MANAGED_PROVENANCE=1" in command[-1]:
+                        return subprocess.CompletedProcess(command, 0,
+                            "EXACT 1\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "")
+                    return subprocess.CompletedProcess(command, 0,
+                        "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "")
+            view = build_ssh_view(self.config(Path(d)), "kiroshi", [], runner=ManagedRunner("", ""))
+            self.assertTrue(all(item.state == "VALID_MANAGED" for item in view.relationships))
+
     def test_loopback_route_is_not_portable_to_target(self):
         with tempfile.TemporaryDirectory() as d:
             extra = """  mikoshi:

@@ -69,6 +69,7 @@ def _relationship(identity, alias, observation: RemoteSSHObservation, bindings,
                   target_identity, observed, known_observed, desired_hosts, desired_reason=None):
     effective = observation.effective
     provenance = observation.provenance
+    managed_provenance = observation.managed_provenance
     if observation.status == "UNAVAILABLE":
         return SSHRelationship(identity, alias, "UNAVAILABLE", provenance, effective, observation.reason,
                                desired_reason=desired_reason)
@@ -95,7 +96,27 @@ def _relationship(identity, alias, observation: RemoteSSHObservation, bindings,
         return SSHRelationship(identity, alias, "NOT_ROUTABLE_FROM_TARGET", provenance, effective, route_reason,
                                desired_reason=desired_reason)
 
+    if provenance == "ABSENT" and managed_provenance == "UNKNOWN":
+        return SSHRelationship(identity, alias, "UNKNOWN", "MANAGED", effective,
+                               observation.managed_reason or "managed SSH provenance is unknown",
+                               desired_reason=desired_reason)
+    if provenance == "ABSENT" and managed_provenance == "CONFLICT":
+        return SSHRelationship(identity, alias, "CONFLICT", "MANAGED", effective,
+                               observation.managed_reason or "multiple managed Host blocks claim the alias",
+                               desired_reason=desired_reason)
+
     if provenance == "ABSENT":
+        if managed_provenance == "EXPLICIT":
+            if not route or effective.get("hostname") != route.get("hostname") or effective.get("port") != route.get("port"):
+                return SSHRelationship(identity, alias, "CONFLICT", "MANAGED", effective,
+                                       "managed alias conflicts with desired route",
+                                       desired_reason=desired_reason)
+            if user and effective.get("user") != user:
+                return SSHRelationship(identity, alias, "CONFLICT", "MANAGED", effective,
+                                       "managed alias user conflicts with topology binding",
+                                       desired_reason=desired_reason)
+            return SSHRelationship(identity, alias, "VALID_MANAGED", "MANAGED", effective,
+                                   "validated Netbot-owned alias", desired_reason=desired_reason)
         return SSHRelationship(
             identity, alias, "MISSING", provenance, effective,
             "no explicit manual alias on target", endpoint, user,

@@ -60,6 +60,7 @@ hosts:
                 (0, "hostname 100.100.57.74\nuser rafael\nport 22\n", ""),
                 (0, EFFECTIVE, ""),
                 (0, "EXACT 1\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", ""),
+                (0, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", ""),
             ])
             result = inspect_target(str(self.config(root)), "kiroshi", "arasaka", runner=runner)
             self.assertEqual(result.provenance, "EXPLICIT")
@@ -72,7 +73,8 @@ hosts:
     def test_wildcard_defaults_are_not_explicit(self):
         with tempfile.TemporaryDirectory() as d:
             runner = Runner([(0, "hostname x\nuser u\nport 22\n", ""), (0, EFFECTIVE, ""),
-                             (0, "EXACT 0\nWILDCARD 1\nINCLUDE 0\nINVALID 0\n", "")])
+                             (0, "EXACT 0\nWILDCARD 1\nINCLUDE 0\nINVALID 0\n", ""),
+                             (0, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "")])
             result = inspect_target(str(self.config(Path(d))), "kiroshi", "arasaka", runner=runner)
             self.assertEqual(result.provenance, "ABSENT")
             self.assertEqual(result.status, "OK")
@@ -85,6 +87,7 @@ hosts:
             ]:
                 runner = Runner([(0, "hostname x\nuser u\nport 22\n", ""),
                                  (0, EFFECTIVE, ""), (0, provenance, "")])
+                runner.outputs.append((0, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", ""))
                 result = inspect_target(str(self.config(Path(d))), "kiroshi", "arasaka", runner=runner)
                 self.assertEqual(result.provenance, "EXPLICIT")
                 self.assertEqual(result.status, "OK")
@@ -92,6 +95,7 @@ hosts:
     def test_absent_and_generated_fragment_provenance_are_not_explicit(self):
         with tempfile.TemporaryDirectory() as d:
             runner = Runner([(0, "hostname x\nuser u\nport 22\n", ""), (0, EFFECTIVE, ""),
+                             (0, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", ""),
                              (0, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "")])
             result = inspect_target(str(self.config(Path(d))), "kiroshi", "arasaka", runner=runner)
             self.assertEqual(result.provenance, "ABSENT")
@@ -103,7 +107,9 @@ hosts:
                 ("EXACT 1\nWILDCARD 0\nINCLUDE 1\nINVALID 0\n", "UNKNOWN"),
                 ("EXACT 2\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "CONFLICT"),
             ]:
-                runner = Runner([(0, "hostname x\nuser u\nport 22\n", ""), (0, EFFECTIVE, ""), (0, provenance, "")])
+                runner = Runner([(0, "hostname x\nuser u\nport 22\n", ""), (0, EFFECTIVE, ""),
+                                 (0, provenance, ""),
+                                 (0, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "")])
                 result = inspect_target(str(self.config(Path(d))), "kiroshi", "arasaka", runner=runner)
                 self.assertEqual(result.provenance, expected)
 

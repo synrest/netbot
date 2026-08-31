@@ -51,6 +51,8 @@ class RemoteSSHObservation:
     effective: dict[str, Any]
     status: str
     reason: str | None = None
+    managed_provenance: str = "ABSENT"
+    managed_reason: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -78,6 +80,17 @@ def _provenance_command(candidate: str) -> str:
         "set -- \"$@\" \"$file\"; "
         "done; fi; "
         "/usr/bin/awk -v candidate=%s %s \"$@\""
+    ) % (_quote(candidate), awk)
+
+
+def _managed_provenance_command(candidate: str) -> str:
+    """Read only the Netbot-owned SSH fragment for managed ownership."""
+    awk = _quote(_AWK_PROVENANCE)
+    return (
+        "NETBOT_MANAGED_PROVENANCE=1; "
+        "if [ -f \"$HOME/.ssh/config.d/50-netbot.conf\" ]; then "
+        "/usr/bin/awk -v candidate=%s %s \"$HOME/.ssh/config.d/50-netbot.conf\"; "
+        "else printf 'EXACT 0\\nWILDCARD 0\\nINCLUDE 0\\nINVALID 0\\n'; fi"
     ) % (_quote(candidate), awk)
 
 
@@ -247,8 +260,24 @@ def inspect_target(
         )
     provenance, reason, _ = _parse_provenance(provenance_output or "")
     status = "OK" if provenance in {"EXPLICIT", "ABSENT"} else provenance
+    managed_command = _managed_provenance_command(candidate_alias)
+    managed_argv = _transport_command(transport, managed_command) if transport else [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        "-o", "ConnectionAttempts=1", transport_alias, managed_command,
+    ]
+    managed_output, managed_error = _run(runner, managed_argv, timeout=8)
+    if managed_error:
+        return RemoteSSHObservation(
+            target_identity, transport_alias, local.get("effective", {}).get("user"),
+            local.get("effective", {}).get("port"), candidate_alias, provenance,
+            effective or {}, "UNAVAILABLE", managed_error,
+        )
+    managed_provenance, managed_parse_reason, _ = _parse_provenance(managed_output or "")
+    if managed_parse_reason and managed_provenance == "UNKNOWN":
+        status = "UNKNOWN"
     return RemoteSSHObservation(
         target_identity, transport_alias, local.get("effective", {}).get("user"),
         local.get("effective", {}).get("port"),
         candidate_alias, provenance, effective or {}, status, reason,
+        managed_provenance=managed_provenance, managed_reason=managed_parse_reason,
     )
