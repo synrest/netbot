@@ -19,6 +19,8 @@ from .doctor import diagnose
 from .version import __version__
 from .snapshot import build_snapshot, compare_snapshot, persist_snapshot, export_snapshot, fetch_snapshot, resolve_authority
 from .discovery.remote_ssh import inspect_target
+from .discovery.tailscale import discover
+from .target_view import build_ssh_view
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -45,9 +47,24 @@ def main(argv=None):
                                   reason=a.reason), indent=2))
         return
     if a.command == "ssh":
-        if a.host != "inspect-target" or not a.target or not a.candidate:
-            p.error("usage: netbot ssh inspect-target TARGET CANDIDATE")
-        print(json.dumps(inspect_target(str(a.config), a.target, a.candidate).as_dict(), indent=2, sort_keys=True))
+        if a.host == "inspect-target":
+            if not a.target or not a.candidate:
+                p.error("usage: netbot ssh inspect-target TARGET CANDIDATE")
+            print(json.dumps(inspect_target(str(a.config), a.target, a.candidate).as_dict(), indent=2, sort_keys=True))
+            return
+        if a.host == "diff-target":
+            if not a.target or a.candidate:
+                p.error("usage: netbot ssh diff-target TARGET")
+            nodes, error = discover()
+            observed = [] if error else [{"identity": node.name, "status": "present", "name": node.name,
+                                          "dns_name": node.dns_name, "addresses": node.addresses}
+                                         for node in nodes]
+            view = build_ssh_view(a.config, a.target, observed)
+            if error:
+                view = type(view)(view.target_identity, "UNAVAILABLE", view.relationships, error)
+            print(json.dumps(view.as_dict(), indent=2, sort_keys=True))
+            return
+        p.error("usage: netbot ssh {inspect-target TARGET CANDIDATE|diff-target TARGET}")
         return
     if a.command == "service":
         actions = {"start": service_start, "stop": service_stop,
