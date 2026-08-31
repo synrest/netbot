@@ -1,6 +1,9 @@
 version: 1
 authority: arasaka
 
+peer_policy:
+  default: topology
+
 agents:
   temporary:
     desired_version: "0.3.0"
