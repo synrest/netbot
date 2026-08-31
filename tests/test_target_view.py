@@ -33,6 +33,7 @@ class TargetViewTests(unittest.TestCase):
     bindings:
       tailscale:
         node_id: arasaka-id
+        name: arasaka
       ssh:
         aliases: [arasaka]
         user: zero
@@ -40,12 +41,14 @@ class TargetViewTests(unittest.TestCase):
     bindings:
       tailscale:
         node_id: kiroshi-id
+        name: kiroshi
       ssh:
         aliases: [kiroshi]
   orion:
     bindings:
       tailscale:
         node_id: orion-id
+        name: orion
       ssh:
         aliases: [orion]
         user: lourdes

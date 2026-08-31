@@ -8,8 +8,9 @@ from typing import Any, Callable
 
 from .config import load_topology
 from .discovery.remote_ssh import RemoteSSHObservation, inspect_target
-from .generate.ssh import _route, _target_matches_observation
+from .generate.ssh import _target_matches_observation
 from .peer_policy import expected_peers, load_peer_policy, PolicyValidationError
+from .desired_route import desired_route
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ def _by_identity(observed):
 
 
 def _relationship(identity, alias, observation: RemoteSSHObservation, bindings,
-                  target_identity, observed, known_observed, desired_reason=None):
+                  target_identity, observed, known_observed, desired_hosts, desired_reason=None):
     effective = observation.effective
     provenance = observation.provenance
     if observation.status == "UNAVAILABLE":
@@ -81,10 +82,14 @@ def _relationship(identity, alias, observation: RemoteSSHObservation, bindings,
         return SSHRelationship(identity, alias, "UNKNOWN", provenance, effective, observation.reason,
                                desired_reason=desired_reason)
 
-    route_status, route, route_reason = _route(bindings, observed, target_identity)
+    route_result = desired_route(target_identity, identity, desired_hosts)
+    route_status = route_result.state
+    route = {"hostname": route_result.hostname, "port": route_result.port} \
+        if route_result.state == "ROUTABLE" else None
+    route_reason = route_result.reason
     endpoint = None
     user = bindings.get("user")
-    if route_status == "CANDIDATE":
+    if route_status == "ROUTABLE":
         endpoint = f"{route['hostname']}:{route['port']}"
     elif route_reason:
         return SSHRelationship(identity, alias, "NOT_ROUTABLE_FROM_TARGET", provenance, effective, route_reason,
@@ -177,7 +182,7 @@ def build_ssh_view(
         unavailable = unavailable or observation.status == "UNAVAILABLE"
         relationship = _relationship(
             host.identity, alias, observation, bindings, target_identity,
-            observed_by_identity.get(host.identity), observed_by_identity, desired_reason,
+            observed_by_identity.get(host.identity), observed_by_identity, hosts, desired_reason,
         )
         relationships.append(relationship)
     status = "UNAVAILABLE" if unavailable else "OK"
