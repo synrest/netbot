@@ -87,3 +87,7 @@ hosts:
       tailscale:
         node_id: "1479759345960161"
         name: netbot-test
+      ssh:
+        aliases:
+          - netbot-test
+        user: zero
