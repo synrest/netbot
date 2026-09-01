@@ -6,7 +6,7 @@ from io import StringIO
 from pathlib import Path
 
 from netbot.cli import main
-from netbot.discovery.remote_ssh import inspect_target, validate_alias
+from netbot.discovery.remote_ssh import _provenance_command, inspect_target, validate_alias
 
 
 EFFECTIVE = """hostname 100.73.226.72
@@ -112,6 +112,52 @@ hosts:
                                  (0, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "")])
                 result = inspect_target(str(self.config(Path(d))), "kiroshi", "arasaka", runner=runner)
                 self.assertEqual(result.provenance, expected)
+
+    def test_canonical_include_resolves_managed_substrate_without_human_ownership(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            ssh_dir = home / ".ssh"
+            config_dir = ssh_dir / "config.d"
+            config_dir.mkdir(parents=True)
+            (ssh_dir / "config").write_text("Include ~/.ssh/config.d/*\n")
+            (config_dir / "50-netbot.conf").write_text(
+                "Host kiroshi\n    HostName kiroshi\n    User rafael\n"
+            )
+            result = subprocess.run(
+                ["/bin/sh", "-c", _provenance_command("kiroshi")],
+                env={"HOME": str(home)}, text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(result.stdout, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n")
+
+    def test_canonical_include_preserves_human_file_order_and_detects_cycle(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            ssh_dir = home / ".ssh"
+            config_dir = ssh_dir / "config.d"
+            config_dir.mkdir(parents=True)
+            (ssh_dir / "config").write_text(
+                "Host before\n    User zero\nInclude ~/.ssh/config.d/*\nHost after\n    User rafael\n"
+            )
+            (config_dir / "20-human.conf").write_text("Host kiroshi\n    User rafael\n")
+            (config_dir / "30-cycle.conf").write_text("Include ~/.ssh/config.d/*\n")
+            (config_dir / "50-netbot.conf").write_text("Host oracle\n    User rafael\n")
+            result = subprocess.run(
+                ["/bin/sh", "-c", _provenance_command("kiroshi")],
+                env={"HOME": str(home)}, text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(result.stdout, "EXACT 2\nWILDCARD 0\nINCLUDE 1\nINVALID 0\n")
+
+    def test_unsupported_include_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            ssh_dir = home / ".ssh"
+            ssh_dir.mkdir(parents=True)
+            (ssh_dir / "config").write_text("Include ~/.ssh/other.conf\n")
+            result = subprocess.run(
+                ["/bin/sh", "-c", _provenance_command("kiroshi")],
+                env={"HOME": str(home)}, text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(result.stdout, "EXACT 0\nWILDCARD 0\nINCLUDE 1\nINVALID 0\n")
 
     def test_invalid_alias_rejected_before_transport(self):
         with tempfile.TemporaryDirectory() as d:

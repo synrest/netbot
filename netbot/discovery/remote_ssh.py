@@ -23,6 +23,7 @@ BEGIN { exact = 0; wildcard = 0; includes = 0; invalid = 0 }
   n = split(line, fields, /[ \t]+/)
   key = tolower(fields[1])
   if (key == "include") { includes = 1; next }
+  if (line == "NETBOT_INCLUDE_ERROR") { includes = 1; next }
   if (key == "host") {
     if (n < 2) { invalid = 1; next }
     for (i = 2; i <= n; i++) {
@@ -67,19 +68,40 @@ def _quote(value: str) -> str:
 
 
 def _provenance_command(candidate: str) -> str:
-    # This is deliberately a fixed reader: only the expected SSH config paths
-    # are examined, and the candidate is data passed through awk -v.
+    # This is deliberately a fixed reader: only the user's SSH config and its
+    # canonical config.d include are examined.  The shell expansion preserves
+    # include position, skips the Netbot-owned file for human provenance, and
+    # fails closed for unsupported, unreadable, or cyclic includes.
     awk = _quote(_AWK_PROVENANCE)
     return (
-        "set --; "
-        "if [ -f \"$HOME/.ssh/config\" ]; then set -- \"$@\" \"$HOME/.ssh/config\"; fi; "
-        "if [ -d \"$HOME/.ssh/config.d\" ]; then "
-        "for file in \"$HOME/.ssh/config.d\"/*; do "
-        "[ -f \"$file\" ] || continue; "
-        "case \"${file##*/}\" in 50-netbot.conf*) continue;; esac; "
-        "set -- \"$@\" \"$file\"; "
-        "done; fi; "
-        "/usr/bin/awk -v candidate=%s %s \"$@\""
+        "seen=\"\"; depth_limit=8; "
+        "netbot_emit_file() { "
+        "file=\"$1\"; depth=\"$2\"; "
+        "case \"$file\" in *[![:print:]]*|*[[:space:]]*) printf '%%s\\n' NETBOT_INCLUDE_ERROR; return;; esac; "
+        "case \" $seen \" in *\" $file \"*) printf '%%s\\n' NETBOT_INCLUDE_ERROR; return;; esac; "
+        "case \"$depth\" in 0|1|2|3|4|5|6|7|8) ;; *) printf '%%s\\n' NETBOT_INCLUDE_ERROR; return;; esac; "
+        "[ -r \"$file\" ] || { printf '%%s\\n' NETBOT_INCLUDE_ERROR; return; }; "
+        "seen=\"$seen$file \"; "
+        "while IFS= read -r raw || [ -n \"$raw\" ]; do "
+        "line=\"$raw\"; while [ -n \"$line\" ]; do first=\"${line%%\"${line#?}\"}\"; case \"$first\" in [[:space:]]) line=\"${line#?}\" ;; *) break ;; esac; done; "
+        "while [ -n \"$line\" ]; do last=\"${line#\"${line%%?}\"}\"; case \"$last\" in [[:space:]]) line=\"${line%%?}\" ;; *) break ;; esac; done; "
+        "case \"$line\" in "
+        "'Include ~/.ssh/config.d/*') "
+        "for included in \"$HOME/.ssh/config.d\"/*; do "
+        "[ -f \"$included\" ] || continue; "
+        "case \"${included##*/}\" in 50-netbot.conf) continue;; esac; "
+        "netbot_emit_file \"$included\" $((depth + 1)); "
+        "done ;; "
+        "Include\\ *) printf '%%s\\n' NETBOT_INCLUDE_ERROR ;; "
+        "*) printf '%%s\\n' \"$raw\" ;; "
+        "esac; done < \"$file\"; "
+        "seen=\"${seen%%$file }\"; "
+        "}; "
+        "if [ -f \"$HOME/.ssh/config\" ]; then netbot_emit_file \"$HOME/.ssh/config\" 0; "
+        "elif [ -d \"$HOME/.ssh/config.d\" ]; then "
+        "for file in \"$HOME/.ssh/config.d\"/*; do [ -f \"$file\" ] || continue; "
+        "case \"${file##*/}\" in 50-netbot.conf) continue;; esac; netbot_emit_file \"$file\" 0; done; fi | "
+        "/usr/bin/awk -v candidate=%s %s"
     ) % (_quote(candidate), awk)
 
 
