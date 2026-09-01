@@ -23,7 +23,7 @@ from .discovery.tailscale import discover
 from .target_view import build_ssh_view
 from .peer_policy import expected_peers, load_peer_policy, PolicyValidationError
 from .render_target import render_target
-from .apply_target import build_apply_plan, apply_target
+from .apply_target import build_apply_plan, apply_target, resolve_observation_transport
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -62,10 +62,15 @@ def main(argv=None):
             observed = [] if error else [{"identity": node.name, "status": "present", "name": node.name,
                                           "dns_name": node.dns_name, "addresses": node.addresses}
                                          for node in nodes]
-            view = build_ssh_view(a.config, a.target, observed)
+            transport = resolve_observation_transport(a.config, a.target, a.db)
+            view = build_ssh_view(a.config, a.target, observed, transport=transport)
             if error:
                 view = type(view)(view.target_identity, "UNAVAILABLE", view.relationships, error)
-            print(json.dumps(view.as_dict(), indent=2, sort_keys=True))
+            payload = view.as_dict()
+            payload["observation_transport"] = (
+                "verified-bootstrap-ordinary-ssh" if transport else "normal-alias"
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
             return
         if a.host == "expected-target":
             if not a.target or a.candidate:

@@ -91,7 +91,7 @@ class ApplyTargetTests(unittest.TestCase):
                 "host_keys": [{"key_type": "ssh-ed25519", "key_data": "AAAA"}],
                 "source": "verified-bootstrap-ordinary-ssh",
             }
-            with patch("netbot.apply_target._bootstrap_transport", return_value=transport), \
+            with patch("netbot.apply_target.resolve_observation_transport", return_value=transport), \
                  patch("netbot.apply_target.build_ssh_view", return_value=view()):
                 plan = build_apply_plan(path, "kiroshi", runner=remote)
             self.assertEqual(plan.action, "CREATE")

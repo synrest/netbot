@@ -106,7 +106,7 @@ def _read_managed(runner, transport_alias, transport_spec=None):
     return "REMOTE_READ_ERROR", None, (result.stderr or "remote managed-file read failed").strip()
 
 
-def _bootstrap_transport(config_path, target_identity: str, db_path=None) -> dict[str, Any] | None:
+def resolve_observation_transport(config_path, target_identity: str, db_path=None) -> dict[str, Any] | None:
     """Load only a positively verified ordinary-SSH bootstrap handoff."""
     _, hosts = load_topology(config_path)
     target = next((host for host in hosts if host.identity == target_identity), None)
@@ -156,7 +156,7 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
     if transport is None:
         return TargetApplyPlan(target_identity, "SOURCE_ERROR", "BLOCKED",
                                reason="target requires exactly one validated SSH transport alias")
-    bootstrap_transport = _bootstrap_transport(config_path, target_identity, db_path)
+    bootstrap_transport = resolve_observation_transport(config_path, target_identity, db_path)
     try:
         view = build_ssh_view(config_path, target_identity, [], runner=runner, transport=bootstrap_transport)
     except PolicyValidationError as exc:
