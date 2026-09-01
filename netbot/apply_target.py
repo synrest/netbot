@@ -202,7 +202,7 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
                                reason="target requires exactly one validated SSH transport alias")
     bootstrap_transport = resolve_observation_transport(config_path, target_identity, db_path)
     try:
-        view = build_ssh_view(config_path, target_identity, [], runner=runner, transport=bootstrap_transport)
+        view = build_ssh_view(config_path, target_identity, runner=runner, transport=bootstrap_transport)
     except PolicyValidationError as exc:
         return TargetApplyPlan(target_identity, "POLICY_ERROR", "BLOCKED", reason=str(exc))
     if view.status in {"POLICY_ABSENT", "INVALID_POLICY", "SOURCE_UNKNOWN", "SOURCE_RETIRED",
@@ -333,7 +333,7 @@ def apply_target(plan: TargetApplyPlan, config_path=None, *, runner=subprocess.r
         state = State(_state_path(config_path)); state.remove_managed_ssh_ownership(plan.target_identity); state.close()
     if config_path is None:
         return {**result, "result": "WRITE_VERIFIED", "view_verification": "NOT_RUN"}
-    view = build_ssh_view(config_path, plan.target_identity, [], runner=runner, transport=plan.transport_spec)
+    view = build_ssh_view(config_path, plan.target_identity, runner=runner, transport=plan.transport_spec)
     if view.status == "UNAVAILABLE":
         return {**result, "result": "WRITE_VERIFIED", "view_verification": "VIEW_UNAVAILABLE",
                 "view_reason": view.reason}

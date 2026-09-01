@@ -11,6 +11,7 @@ from .discovery.remote_ssh import RemoteSSHObservation, inspect_target
 from .generate.ssh import _target_matches_observation
 from .peer_policy import expected_peers, load_peer_policy, PolicyValidationError
 from .desired_route import desired_route
+from .discovery.tailscale import discover
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,14 @@ def build_ssh_view(
     transport: dict[str, Any] | None = None,
 ) -> SSHView:
     """Build a target-relative view from topology and local observations."""
+    discovery_error = None
+    if observed is None:
+        nodes, discovery_error = discover()
+        observed = [] if discovery_error else [
+            {"identity": node.name, "status": "present", "name": node.name,
+             "dns_name": node.dns_name, "addresses": node.addresses}
+            for node in nodes
+        ]
     _, hosts = load_topology(config_path)
     target = next((host for host in hosts if host.identity == target_identity), None)
     if target is None:
@@ -207,6 +216,6 @@ def build_ssh_view(
             observed_by_identity.get(host.identity), observed_by_identity, hosts, desired_reason,
         )
         relationships.append(relationship)
-    status = "UNAVAILABLE" if unavailable else "OK"
-    reason = "target transport or observation unavailable" if unavailable else None
+    status = "UNAVAILABLE" if unavailable or discovery_error else "OK"
+    reason = discovery_error or ("target transport or observation unavailable" if unavailable else None)
     return SSHView(target_identity, status, relationships, reason)

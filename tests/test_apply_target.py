@@ -93,6 +93,13 @@ class ApplyTargetTests(unittest.TestCase):
                 again = build_apply_plan(path, "kiroshi", runner=remote)
             self.assertEqual(plan.desired_content, again.desired_content)
 
+    def test_apply_plan_delegates_manual_proof_to_shared_view(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.config(Path(d)); remote = RemoteFiles()
+            with patch("netbot.apply_target.build_ssh_view", return_value=view("VALID_MANUAL", "EXPLICIT")) as build_view:
+                build_apply_plan(path, "kiroshi", runner=remote)
+            self.assertEqual(build_view.call_args.args, (path, "kiroshi"))
+
     def test_verified_bootstrap_transport_bridges_missing_alias(self):
         with tempfile.TemporaryDirectory() as d:
             path = self.config(Path(d)); remote = RemoteFiles()

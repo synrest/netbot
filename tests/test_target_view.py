@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from netbot.target_view import build_ssh_view
 
@@ -81,6 +82,14 @@ class TargetViewTests(unittest.TestCase):
             runner = Runner(EFFECTIVE_ARASAKA, "EXACT 1\nWILDCARD 1\nINCLUDE 0\nINVALID 0\n")
             view = build_ssh_view(self.config(Path(d)), "kiroshi", self.observed(
                 ("arasaka", "arasaka", "100.73.226.72")), runner=runner)
+            self.assertEqual(view.relationships[0].state, "VALID_MANUAL")
+
+    def test_default_observation_path_uses_shared_discovery_for_manual_proof(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner = Runner(EFFECTIVE_ARASAKA, "EXACT 1\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n")
+            node = type("Node", (), {"name": "arasaka", "dns_name": "arasaka.tail", "addresses": ["100.73.226.72"]})()
+            with patch("netbot.target_view.discover", return_value=([node], None)):
+                view = build_ssh_view(self.config(Path(d)), "kiroshi", runner=runner)
             self.assertEqual(view.relationships[0].state, "VALID_MANUAL")
 
     def test_explicit_unproven_destination_is_unknown_not_valid_manual(self):
