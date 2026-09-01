@@ -7,7 +7,9 @@ import json
 import tempfile
 import atexit
 import os
-from dataclasses import asdict, dataclass
+import hashlib
+from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,11 +21,17 @@ from .target_view import SSHView, build_ssh_view
 
 
 MANAGED_PATH = "~/.ssh/config.d/50-netbot.conf"
-READ_COMMAND = 'if [ -f "$HOME/.ssh/config.d/50-netbot.conf" ]; then cat "$HOME/.ssh/config.d/50-netbot.conf"; else exit 3; fi'
+MANAGED_MARKER = "# netbot-managed: ssh-topology"
+CONTROLLER_MARKER = "# netbot-controller: "
+READ_COMMAND = 'if [ -L "$HOME/.ssh" ]; then exit 43; fi; if [ -L "$HOME/.ssh/config.d" ]; then exit 44; fi; if [ -L "$HOME/.ssh/config.d/50-netbot.conf" ]; then exit 45; fi; if [ -e "$HOME/.ssh/config.d/50-netbot.conf" ] && [ ! -f "$HOME/.ssh/config.d/50-netbot.conf" ]; then exit 46; fi; if [ -f "$HOME/.ssh/config.d/50-netbot.conf" ]; then cat "$HOME/.ssh/config.d/50-netbot.conf"; else exit 3; fi'
 REMOVE_COMMAND = 'if [ -f "$HOME/.ssh/config.d/50-netbot.conf" ]; then rm "$HOME/.ssh/config.d/50-netbot.conf"; fi'
 WRITE_COMMAND = '''set -eu
 if [ ! -d "$HOME/.ssh" ]; then exit 41; fi
+if [ -L "$HOME/.ssh" ]; then exit 43; fi
+if [ -L "$HOME/.ssh/config.d" ]; then exit 44; fi
 mkdir -p "$HOME/.ssh/config.d"
+if [ -L "$HOME/.ssh/config.d/50-netbot.conf" ]; then exit 45; fi
+if [ -e "$HOME/.ssh/config.d/50-netbot.conf" ] && [ ! -f "$HOME/.ssh/config.d/50-netbot.conf" ]; then exit 46; fi
 tmp=$(mktemp "$HOME/.ssh/config.d/.50-netbot.XXXXXXXX")
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 umask 077
@@ -104,6 +112,42 @@ def _read_managed(runner, transport_alias, transport_spec=None):
     if result.returncode == 3:
         return "ABSENT", None, None
     return "REMOTE_READ_ERROR", None, (result.stderr or "remote managed-file read failed").strip()
+
+
+def _state_path(config_path):
+    return Path(config_path).parent.parent / "state" / "netbot.sqlite3"
+
+
+def _ownership_state(config_path, target_identity, current, target_node_id=None, *, create_identity=False, db_path=None):
+    from .state import State
+    state = State(Path(db_path) if db_path else _state_path(config_path))
+    record = state.managed_ssh_ownership(target_identity)
+    controller_id = state.controller_identity(create=create_identity)
+    state.close()
+    if current is None:
+        return "ABSENT", record, controller_id
+    lines = (current.splitlines() if current is not None else [])
+    marker = next((line[len(CONTROLLER_MARKER):].strip() for line in lines if line.startswith(CONTROLLER_MARKER)), None)
+    marked = MANAGED_MARKER in lines and marker
+    if not marked:
+        return "UNMARKED_EXISTING", record, controller_id
+    if controller_id and marker != controller_id:
+        return "FOREIGN_CONTROLLER", record, controller_id
+    if not record:
+        return "UNCLAIMED_MARKED", record, controller_id
+    digest = hashlib.sha256(current.encode()).hexdigest()
+    recorded_node_id = record.get("target_node_id")
+    current_node_id = str(target_node_id) if target_node_id is not None else None
+    if (record.get("controller_id") != marker or record.get("managed_path") != MANAGED_PATH or
+            record.get("target_identity") != target_identity or recorded_node_id != current_node_id):
+        return "OWNERSHIP_MISMATCH", record, controller_id
+    if record.get("content_hash") != digest:
+        return "DRIFTED", record, controller_id
+    return "OWNED", record, controller_id
+
+
+def _managed_content(controller_id, content):
+    return f"{MANAGED_MARKER}\n{CONTROLLER_MARKER}{controller_id}\n" + content
 
 
 def resolve_observation_transport(config_path, target_identity: str, db_path=None) -> dict[str, Any] | None:
@@ -212,6 +256,18 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
         return TargetApplyPlan(target_identity, "REMOTE_READ_ERROR", "BLOCKED", managed_peers=managed,
                                human_peers=human, desired_content=desired, reason=reason,
                                transport_alias=transport, transport_spec=bootstrap_transport)
+    target_node_id = next((host.attrs.get("bindings", {}).get("tailscale", {}).get("node_id")
+                           for host in load_topology(config_path)[1] if host.identity == target_identity), None)
+    ownership, record, controller_id = _ownership_state(config_path, target_identity, current, target_node_id, db_path=db_path)
+    if current is None and controller_id is None:
+        controller_id = "unprovisioned"
+    if desired:
+        desired = _managed_content(controller_id, desired)
+    if current is not None and ownership != "OWNED" and desired != current:
+        return TargetApplyPlan(target_identity, ownership, "BLOCKED", managed_peers=managed,
+                               human_peers=human, desired_content=desired, current_managed_content=current,
+                               reason="managed SSH file ownership is not proven for this controller",
+                               transport_alias=transport, transport_spec=bootstrap_transport)
     if not desired:
         action = "REMOVE" if current is not None else "NO_CHANGE"
     elif current is None:
@@ -220,6 +276,11 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
         action = "REPLACE"
     else:
         action = "NO_CHANGE"
+    if action == "REMOVE" and ownership != "OWNED":
+        return TargetApplyPlan(target_identity, ownership, "BLOCKED", managed_peers=managed,
+                               human_peers=human, current_managed_content=current,
+                               reason="managed SSH file ownership is not proven for this controller",
+                               transport_alias=transport, transport_spec=bootstrap_transport)
     return TargetApplyPlan(target_identity, "READY", action, managed, human, (), desired, current,
                            transport_alias=transport, transport_spec=bootstrap_transport)
 
@@ -232,6 +293,14 @@ def apply_target(plan: TargetApplyPlan, config_path=None, *, runner=subprocess.r
     if plan.action == "NO_CHANGE":
         result.update({"result": "NO_CHANGE", "verification": "NOT_NEEDED"})
         return result
+    if (plan.desired_content.startswith(MANAGED_MARKER + "\n") and
+            CONTROLLER_MARKER + "unprovisioned\n" in plan.desired_content):
+        from .state import State
+        state = State(_state_path(config_path)); controller_id = state.controller_identity(create=True); state.close()
+        plan = replace(plan, desired_content=plan.desired_content.replace(
+            MANAGED_MARKER + "\n" + CONTROLLER_MARKER + "unprovisioned\n",
+            MANAGED_MARKER + "\n" + CONTROLLER_MARKER + controller_id + "\n", 1))
+    result = plan.as_dict()
     transport = plan.transport_alias
     if not transport:
         return {**result, "result": "REMOTE_READ_ERROR", "reason": "missing target transport"}
@@ -245,6 +314,23 @@ def apply_target(plan: TargetApplyPlan, config_path=None, *, runner=subprocess.r
                (plan.action != "REMOVE" and read_state == "OK" and current == plan.desired_content)
     if not verified:
         return {**result, "result": "WRITE_VERIFICATION_FAILED", "reason": reason or "managed file bytes differ"}
+    if plan.action != "REMOVE":
+        from .state import State
+        target_node_id = next((host.attrs.get("bindings", {}).get("tailscale", {}).get("node_id")
+                               for host in load_topology(config_path)[1] if host.identity == plan.target_identity), None)
+        controller_id = next((line[len(CONTROLLER_MARKER):].strip() for line in plan.desired_content.splitlines()
+                              if line.startswith(CONTROLLER_MARKER)), None)
+        try:
+            state = State(_state_path(config_path))
+            state.save_managed_ssh_ownership(plan.target_identity, controller_id, MANAGED_PATH,
+                                             target_node_id, hashlib.sha256(plan.desired_content.encode()).hexdigest(),
+                                             datetime.now(timezone.utc).isoformat())
+            state.close()
+        except Exception as exc:
+            return {**result, "result": "OWNERSHIP_UNPROVEN", "reason": f"managed write verified but ownership persistence failed: {exc}"}
+    else:
+        from .state import State
+        state = State(_state_path(config_path)); state.remove_managed_ssh_ownership(plan.target_identity); state.close()
     if config_path is None:
         return {**result, "result": "WRITE_VERIFIED", "view_verification": "NOT_RUN"}
     view = build_ssh_view(config_path, plan.target_identity, [], runner=runner, transport=plan.transport_spec)

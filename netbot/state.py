@@ -1,4 +1,4 @@
-import json, sqlite3
+import json, sqlite3, uuid
 from pathlib import Path
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS hosts(identity TEXT PRIMARY KEY, desired_json TEXT NOT NULL);
@@ -134,6 +134,37 @@ class State:
         except sqlite3.OperationalError:
             return None
         return json.loads(row[0]) if row else None
+    def controller_identity(self, create=True):
+        if create:
+            self.db.execute("CREATE TABLE IF NOT EXISTS controller_identity(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL)")
+        else:
+            try:
+                row = self.db.execute("SELECT value FROM controller_identity WHERE id=1").fetchone()
+            except sqlite3.OperationalError:
+                return None
+            return row[0] if row else None
+        row = self.db.execute("SELECT value FROM controller_identity WHERE id=1").fetchone()
+        if row:
+            return row[0]
+        if not create:
+            return None
+        value = uuid.uuid4().hex
+        self.db.execute("INSERT INTO controller_identity(id,value) VALUES (1,?)", (value,)); self.db.commit()
+        return value
+    def managed_ssh_ownership(self, target_identity):
+        try:
+            row = self.db.execute("SELECT target_identity,controller_id,managed_path,target_node_id,content_hash,updated_at FROM managed_ssh_ownership WHERE target_identity=?", (target_identity,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return dict(row) if row else None
+    def save_managed_ssh_ownership(self, target_identity, controller_id, managed_path, target_node_id, content_hash, updated_at):
+        self.db.execute("CREATE TABLE IF NOT EXISTS managed_ssh_ownership(target_identity TEXT PRIMARY KEY, controller_id TEXT NOT NULL, managed_path TEXT NOT NULL, target_node_id TEXT, content_hash TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        self.db.execute("INSERT INTO managed_ssh_ownership(target_identity,controller_id,managed_path,target_node_id,content_hash,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(target_identity) DO UPDATE SET controller_id=excluded.controller_id,managed_path=excluded.managed_path,target_node_id=excluded.target_node_id,content_hash=excluded.content_hash,updated_at=excluded.updated_at", (target_identity,controller_id,managed_path,target_node_id,content_hash,updated_at)); self.db.commit()
+    def remove_managed_ssh_ownership(self, target_identity):
+        try:
+            self.db.execute("DELETE FROM managed_ssh_ownership WHERE target_identity=?", (target_identity,)); self.db.commit()
+        except sqlite3.OperationalError:
+            pass
     def adoption_event(self, created_at, topology_identity, node_id, observed_name, details=None):
         self.db.execute("CREATE TABLE IF NOT EXISTS adoption_events(id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, topology_identity TEXT NOT NULL, node_id TEXT NOT NULL, observed_name TEXT, details_json TEXT NOT NULL)")
         payload = dict(details or {}); payload["observed_name"] = observed_name
