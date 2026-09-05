@@ -169,6 +169,18 @@ class TargetActivationTests(unittest.TestCase):
         self.assertIn("mv \"$restore_tmp\" \"$HOME/.ssh/config\"", command)
         self.assertNotIn("mv \"$backup\" \"$HOME/.ssh/config\"", command)
         self.assertIn("restored_hash", command)
+        for operation in ("restore_tmp=$(mktemp", "cp \"$backup\"", "chmod 600 \"$restore_tmp\"",
+                          "mv \"$restore_tmp\""):
+            self.assertIn("if ! " + operation, command)
+
+    def test_remote_verified_rollback_is_explicit(self):
+        plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
+                                    desired_content=INCLUDE + "\nHost *\n",
+                                    transport_alias="netbot-test")
+        runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 48, "", "")
+        with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            result = activate_target(plan, Path("topology.yaml"), runner=runner)
+        self.assertEqual(result["rollback_state"], "ACTIVATION_ROLLBACK_SUCCEEDED")
 
     def test_remote_concurrent_rollback_is_first_class(self):
         plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",

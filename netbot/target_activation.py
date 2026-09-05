@@ -64,18 +64,28 @@ if [ "$current_hash" != {expected} ]; then
 fi
 mv "$tmp" "$HOME/.ssh/config"
 if ! grep -Fqx 'Include ~/.ssh/config.d/*' "$HOME/.ssh/config" || ! {alias_check}; then
+  rollback_authorized=false
   if [ -L "$HOME/.ssh/config" ] || [ ! -f "$HOME/.ssh/config" ]; then exit 51; fi
-  if command -v sha256sum >/dev/null 2>&1; then current_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else current_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    if ! current_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); then exit 51; fi
+  else
+    if ! current_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); then exit 51; fi
+  fi
   if [ "$current_hash" = {original} ]; then
     [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
     exit 48
   fi
   if [ "$current_hash" != {expected} ]; then exit 50; fi
-  restore_tmp=$(mktemp "$HOME/.ssh/.config.netbot.restore.XXXXXXXX")
-  cp "$backup" "$restore_tmp"
-  chmod 600 "$restore_tmp"
-  mv "$restore_tmp" "$HOME/.ssh/config"
-  if command -v sha256sum >/dev/null 2>&1; then restored_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else restored_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
+  rollback_authorized=true
+  if ! restore_tmp=$(mktemp "$HOME/.ssh/.config.netbot.restore.XXXXXXXX"); then exit 49; fi
+  if ! cp "$backup" "$restore_tmp"; then exit 49; fi
+  if ! chmod 600 "$restore_tmp"; then exit 49; fi
+  if ! mv "$restore_tmp" "$HOME/.ssh/config"; then exit 49; fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    if ! restored_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); then exit 49; fi
+  else
+    if ! restored_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); then exit 49; fi
+  fi
   if [ "$restored_hash" != {original} ]; then exit 49; fi
   if ! {alias_check}; then exit 49; fi
   [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
@@ -219,6 +229,10 @@ def activate_target(plan: TargetActivationPlan, config_path, *, db_path=None,
             return {**result, "result": "ACTIVATION_ROLLBACK_FAILED",
                     "rollback_state": "ACTIVATION_ROLLBACK_FAILED",
                     "reason": "rollback was attempted but exact restoration or verification failed"}
+        if remote_code == 48:
+            return {**result, "result": "WRITE_FAILED", "commit_state": "NOT_COMMITTED",
+                    "rollback_state": "ACTIVATION_ROLLBACK_SUCCEEDED",
+                    "reason": "activation failed after verified rollback to original bytes"}
         return _recover_activation(plan, config_path, db_path, runner,
                                    remote[1] if isinstance(remote, tuple) else (remote.stderr or "substrate creation failed").strip(),
                                    result)
