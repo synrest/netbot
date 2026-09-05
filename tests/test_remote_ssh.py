@@ -129,6 +129,20 @@ hosts:
             )
             self.assertEqual(result.stdout, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n")
 
+    def test_empty_canonical_include_preserves_parent_human_provenance_in_zsh(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            (home / ".ssh" / "config.d").mkdir(parents=True)
+            (home / ".ssh" / "config").write_text(
+                "Include ~/.ssh/config.d/*\nHost oracle\n    User rafael\n"
+            )
+            result = subprocess.run(
+                ["/bin/zsh", "-c", _provenance_command("oracle")],
+                env={"HOME": str(home)}, text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(result.stdout, "EXACT 1\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n")
+            self.assertEqual(result.stderr, "")
+
     def test_canonical_include_preserves_human_file_order_and_detects_cycle(self):
         with tempfile.TemporaryDirectory() as d:
             home = Path(d)

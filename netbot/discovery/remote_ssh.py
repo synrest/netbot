@@ -74,6 +74,7 @@ def _provenance_command(candidate: str) -> str:
     # fails closed for unsupported, unreadable, or cyclic includes.
     awk = _quote(_AWK_PROVENANCE)
     return (
+        "if [ -n \"${ZSH_VERSION-}\" ]; then setopt NULL_GLOB; fi; "
         "seen=\"\"; depth_limit=8; "
         "netbot_emit_file() { "
         "file=\"$1\"; depth=\"$2\"; "
