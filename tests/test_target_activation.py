@@ -191,6 +191,23 @@ class TargetActivationTests(unittest.TestCase):
                           "mv \"$restore_tmp\""):
             self.assertIn("if ! " + operation, command)
 
+    def test_insert_transaction_validates_original_before_rename(self):
+        import hashlib
+        from netbot.target_activation import _insert_command
+        original = "Host *\n    User rafael\n"
+        expected = INCLUDE + "\n" + original
+        command = _insert_command(hashlib.sha256(expected.encode()).hexdigest(),
+                                  hashlib.sha256(original.encode()).hexdigest(), None)
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            (home / ".ssh").mkdir()
+            (home / ".ssh" / "config").write_text(original)
+            result = subprocess.run(["/bin/sh", "-c", command], input=expected,
+                                    text=True, capture_output=True, check=False,
+                                    env={"HOME": str(home)}, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((home / ".ssh" / "config").read_text(), expected)
+
     def test_remote_verified_rollback_is_explicit(self):
         plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
                                     desired_content=INCLUDE + "\nHost *\n",

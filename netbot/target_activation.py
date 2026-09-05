@@ -49,7 +49,7 @@ created_dir=0
 if [ ! -d "$HOME/.ssh/config.d" ]; then mkdir -p "$HOME/.ssh/config.d"; chmod 700 "$HOME/.ssh/config.d"; created_dir=1; fi
 if [ -e "$HOME/.ssh/config.d" ] && [ ! -d "$HOME/.ssh/config.d" ]; then exit 45; fi
 if command -v sha256sum >/dev/null 2>&1; then current_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else current_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
-if [ "$current_hash" != {expected} ]; then [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true; exit 47; fi
+if [ "$current_hash" != {original} ]; then [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true; exit 47; fi
 backup=$(mktemp "$HOME/.ssh/.config.netbot.rollback.XXXXXXXX")
 tmp=$(mktemp "$HOME/.ssh/.config.netbot.XXXXXXXX")
 trap 'rm -f "$tmp" "$backup"' EXIT HUP INT TERM
@@ -58,7 +58,7 @@ umask 077
 cat > "$tmp"
 chmod 600 "$tmp"
 if command -v sha256sum >/dev/null 2>&1; then current_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else current_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
-if [ "$current_hash" != {expected} ]; then
+if [ "$current_hash" != {original} ]; then
   [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
   exit 47
 fi
