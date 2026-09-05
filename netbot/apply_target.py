@@ -75,6 +75,12 @@ def _remote(runner: Callable[..., Any], transport_alias: str, command: str, *, i
             transport_spec: dict[str, Any] | None = None):
     temporary = None
     try:
+        if transport_spec and transport_spec.get("local"):
+            env = os.environ.copy()
+            env["HOME"] = transport_spec.get("home", str(Path.home()))
+            return runner(["/bin/sh", "-c", command], env=env, text=True,
+                          capture_output=True, check=False, timeout=10,
+                          **({"input": input_text} if input_text is not None else {}))
         if transport_spec:
             temporary = tempfile.NamedTemporaryFile("w", prefix="netbot-bootstrap-known-hosts-", delete=True)
             for key in transport_spec["host_keys"]:
@@ -152,6 +158,8 @@ def _managed_content(controller_id, content):
 
 def resolve_observation_transport(config_path, target_identity: str, db_path=None) -> dict[str, Any] | None:
     """Load only a positively verified ordinary-SSH bootstrap handoff."""
+    if load_topology_authority(config_path) == target_identity:
+        return {"local": True, "home": str(Path.home()), "source": "local-filesystem"}
     _, hosts = load_topology(config_path)
     target = next((host for host in hosts if host.identity == target_identity), None)
     if target is None:
@@ -193,9 +201,6 @@ def resolve_observation_transport(config_path, target_identity: str, db_path=Non
 
 def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run, db_path=None) -> TargetApplyPlan:
     """Build a complete plan; no remote write is performed."""
-    if load_topology_authority(config_path) == target_identity:
-        return TargetApplyPlan(target_identity, "LOCAL_TARGET_NOT_IMPLEMENTED", "BLOCKED",
-                               reason="local target application is not implemented")
     transport = _transport_alias(config_path, target_identity)
     if transport is None:
         return TargetApplyPlan(target_identity, "SOURCE_ERROR", "BLOCKED",

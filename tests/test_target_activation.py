@@ -27,6 +27,20 @@ class ActivationRunner:
 
 
 class TargetActivationTests(unittest.TestCase):
+    def test_local_activation_uses_local_filesystem_transport(self):
+        original = "Host *\n    User zero\n"
+        expected = INCLUDE + "\n" + original
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d); (home / ".ssh").mkdir()
+            (home / ".ssh" / "config").write_text(original)
+            plan = TargetActivationPlan(
+                "arasaka", "READY", "INSERT_INCLUDE", desired_content=expected,
+                transport_alias="arasaka", transport_source="local-filesystem",
+                transport_spec={"local": True, "home": str(home), "source": "local-filesystem"})
+            result = activate_target(plan, Path(d) / "config" / "topology.yaml")
+            self.assertEqual(result["result"], "WRITE_VERIFIED")
+            self.assertEqual((home / ".ssh" / "config").read_text(), expected)
+
     def test_live_activation_uses_planned_normal_alias_without_bootstrap(self):
         original = "Host *\n    User rafael\n"
         expected = INCLUDE + "\n" + original

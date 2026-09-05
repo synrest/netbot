@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from netbot.apply_target import (READ_COMMAND, REMOVE_COMMAND, WRITE_COMMAND,
-                                 CONTROLLER_MARKER, MANAGED_MARKER, apply_target, build_apply_plan)
+                                 CONTROLLER_MARKER, MANAGED_MARKER, TargetApplyPlan,
+                                 apply_target, build_apply_plan)
 from netbot.state import State
 from netbot.target_view import SSHRelationship, SSHView
 
@@ -277,15 +278,27 @@ class ApplyTargetTests(unittest.TestCase):
             self.assertEqual(result["result"], "WRITE_VERIFIED")
             self.assertEqual(result["view_verification"], "VIEW_UNAVAILABLE")
 
+    def test_local_target_uses_local_filesystem_transport(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); path = self.config(root)
+            home = root / "home"; (home / ".ssh" / "config.d").mkdir(parents=True)
+            transport = {"local": True, "home": str(home), "source": "local-filesystem"}
+            content = f"{MANAGED_MARKER}\n{CONTROLLER_MARKER}local-controller\nHost kiroshi\n    HostName kiroshi\n    User rafael\n    Port 22\n"
+            plan = TargetApplyPlan(
+                "arasaka", "READY", "CREATE", desired_content=content,
+                transport_alias="arasaka", transport_spec=transport)
+            with patch("netbot.apply_target.build_ssh_view", return_value=view()), \
+                 patch("netbot.apply_target._state_path", return_value=root / "state" / "netbot.sqlite3"):
+                result = apply_target(plan, path)
+            self.assertEqual(result["result"], "WRITE_VERIFIED")
+            self.assertEqual((home / ".ssh" / "config.d" / "50-netbot.conf").read_text(), content)
+
     def test_local_target_and_transport_read_failure_block(self):
         with tempfile.TemporaryDirectory() as d:
-            path = self.config(Path(d))
-            self.assertEqual(build_apply_plan(path, "arasaka").state, "LOCAL_TARGET_NOT_IMPLEMENTED")
-            remote = RemoteFiles()
-            remote.__call__ = lambda *args, **kwargs: None
+            path = self.config(Path(d)); remote = RemoteFiles()
             with patch("netbot.apply_target.build_ssh_view", return_value=view()), \
                  patch("netbot.apply_target._read_managed", return_value=("REMOTE_READ_ERROR", None, "read failed")):
-                plan = build_apply_plan(path, "kiroshi", runner=RemoteFiles())
+                plan = build_apply_plan(path, "kiroshi", runner=remote)
             self.assertEqual(plan.state, "REMOTE_READ_ERROR")
             self.assertEqual(plan.action, "BLOCKED")
 

@@ -69,6 +69,7 @@ def main(argv=None):
                 view = type(view)(view.target_identity, "UNAVAILABLE", view.relationships, error)
             payload = view.as_dict()
             payload["observation_transport"] = (
+                "local-filesystem" if transport and transport.get("local") else
                 "verified-bootstrap-ordinary-ssh" if transport else "normal-alias"
             )
             print(json.dumps(payload, indent=2, sort_keys=True))

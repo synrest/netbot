@@ -189,6 +189,22 @@ def _run(
     return completed.stdout, None
 
 
+def _run_local(runner, command, home):
+    import os
+    env = os.environ.copy()
+    env["HOME"] = home
+    try:
+        completed = runner(command, text=True, capture_output=True, check=False,
+                           timeout=8, env=env)
+    except subprocess.TimeoutExpired:
+        return None, "local command timeout"
+    except OSError as exc:
+        return None, f"local command unavailable: {exc}"
+    if completed.returncode != 0:
+        return None, (completed.stderr or f"local command exited {completed.returncode}").strip()
+    return completed.stdout, None
+
+
 def _transport_command(transport: dict[str, Any], remote_command: str) -> list[str]:
     """Build strict ordinary SSH argv for a verified bootstrap transport."""
     return [
@@ -200,6 +216,39 @@ def _transport_command(transport: dict[str, Any], remote_command: str) -> list[s
         "-o", f"UserKnownHostsFile={transport['known_hosts_file']}",
         f"{transport['user']}@{transport['endpoint']}", remote_command,
     ]
+
+
+def _inspect_local(target_identity, transport_alias, candidate_alias, runner, home):
+    effective_output, reason = _run_local(runner, ["ssh", "-G", candidate_alias], home)
+    if reason:
+        return RemoteSSHObservation(target_identity, transport_alias, None, None,
+                                    candidate_alias, "UNKNOWN", {}, "UNAVAILABLE", reason)
+    effective, reason = _parse_effective(effective_output or "")
+    if reason:
+        return RemoteSSHObservation(target_identity, transport_alias, None, None,
+                                    candidate_alias, "UNKNOWN", {}, "INVALID", reason)
+    provenance_output, reason = _run_local(
+        runner, ["/bin/sh", "-c", _provenance_command(candidate_alias)], home)
+    if reason:
+        return RemoteSSHObservation(target_identity, transport_alias, effective.get("user"),
+                                    effective.get("port"), candidate_alias, "UNKNOWN",
+                                    effective, "UNAVAILABLE", reason)
+    provenance, reason, _ = _parse_provenance(provenance_output or "")
+    status = "OK" if provenance in {"EXPLICIT", "ABSENT"} else provenance
+    managed_output, managed_error = _run_local(
+        runner, ["/bin/sh", "-c", _managed_provenance_command(candidate_alias)], home)
+    if managed_error:
+        return RemoteSSHObservation(target_identity, transport_alias, effective.get("user"),
+                                    effective.get("port"), candidate_alias, provenance,
+                                    effective, "UNAVAILABLE", managed_error)
+    managed_provenance, managed_reason, _ = _parse_provenance(managed_output or "")
+    if managed_reason and managed_provenance == "UNKNOWN":
+        status = "UNKNOWN"
+    return RemoteSSHObservation(target_identity, transport_alias, effective.get("user"),
+                                effective.get("port"), candidate_alias, provenance,
+                                effective, status, reason,
+                                managed_provenance=managed_provenance,
+                                managed_reason=managed_reason)
 
 
 def inspect_target(
@@ -239,6 +288,9 @@ def inspect_target(
         )
 
     transport_alias = target_ssh["aliases"][0]
+    if transport and transport.get("local"):
+        return _inspect_local(target_identity, transport_alias, candidate_alias, runner,
+                              transport.get("home", str(Path.home())))
     local = effective_config(transport_alias, runner=runner) if transport is None else {
         "status": "available", "effective": {
             "user": transport.get("user"), "port": transport.get("port", 22)
