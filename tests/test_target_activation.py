@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from netbot.target_activation import (CREATE_COMMAND, INCLUDE, build_activation_plan,
-                                      activate_target)
+from netbot.target_activation import (CREATE_COMMAND, INCLUDE, TargetActivationPlan,
+                                      build_activation_plan, activate_target)
 
 
 SPEC = {
@@ -118,6 +118,56 @@ class TargetActivationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=None):
             plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test", runner=runner)
         self.assertEqual((plan.state, plan.action), ("UNAVAILABLE", "BLOCKED"))
+
+    def test_lost_response_recovers_exact_expected_commit(self):
+        original = "Host *\n    User rafael\n"
+        expected = INCLUDE + "\n" + original
+        plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE", desired_content=expected,
+                                    transport_alias="netbot-test")
+        class RecoveryRunner:
+            def __init__(self): self.calls = 0
+            def __call__(self, command, **kwargs):
+                self.calls += 1
+                if self.calls == 1: return (None, "connection lost after commit")
+                return subprocess.CompletedProcess(command, 0,
+                    "NETBOT_CONFIG_PRESENT\n" + expected + "NETBOT_CONFIG_D_PRESENT\n", "")
+        with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            result = activate_target(plan, Path("topology.yaml"), runner=RecoveryRunner())
+        self.assertEqual((result["result"], result["commit_state"]), ("WRITE_VERIFIED", "COMMITTED_AND_VERIFIED"))
+
+    def test_lost_response_recovers_exact_original_as_not_committed(self):
+        original = "Host *\n    User rafael\n"
+        expected = INCLUDE + "\n" + original
+        plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE", desired_content=expected,
+                                    transport_alias="netbot-test")
+        class RecoveryRunner:
+            def __init__(self): self.calls = 0
+            def __call__(self, command, **kwargs):
+                self.calls += 1
+                if self.calls == 1: return (None, "connection lost after rollback")
+                return subprocess.CompletedProcess(command, 0,
+                    "NETBOT_CONFIG_PRESENT\n" + original + "NETBOT_CONFIG_D_ABSENT\n", "")
+        with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            result = activate_target(plan, Path("topology.yaml"), runner=RecoveryRunner())
+        self.assertEqual((result["result"], result["commit_state"]), ("WRITE_FAILED", "NOT_COMMITTED"))
+
+    def test_lost_response_without_recovery_is_indeterminate(self):
+        original = "Host *\n    User rafael\n"
+        plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
+                                    desired_content=INCLUDE + "\n" + original,
+                                    transport_alias="netbot-test")
+        class UnavailableRunner:
+            def __call__(self, command, **kwargs): return (None, "connection lost")
+        with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            result = activate_target(plan, Path("topology.yaml"), runner=UnavailableRunner())
+        self.assertEqual((result["result"], result["commit_state"]),
+                         ("ACTIVATION_STATE_INDETERMINATE", "COMMIT_OUTCOME_UNKNOWN"))
+
+    def test_insert_transaction_contains_rollback_verification(self):
+        from netbot.target_activation import _insert_command
+        command = _insert_command("a" * 64, "netbot-test")
+        self.assertIn("mv \"$backup\" \"$HOME/.ssh/config\"", command)
+        self.assertIn("restored_hash", command)
 
 
 if __name__ == "__main__":

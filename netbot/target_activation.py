@@ -65,6 +65,8 @@ fi
 mv "$tmp" "$HOME/.ssh/config"
 if ! grep -Fqx 'Include ~/.ssh/config.d/*' "$HOME/.ssh/config" || ! {alias_check}; then
   mv "$backup" "$HOME/.ssh/config"
+  if command -v sha256sum >/dev/null 2>&1; then restored_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else restored_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
+  if [ "$restored_hash" != {expected} ]; then exit 49; fi
   [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
   exit 48
 fi
@@ -195,8 +197,41 @@ def activate_target(plan: TargetActivationPlan, config_path, *, db_path=None,
     remote = _remote(runner, plan.target_identity, command, input_text=plan.desired_content if plan.action == "INSERT_INCLUDE" else None,
                      transport_spec=spec)
     if isinstance(remote, tuple) or remote.returncode != 0:
-        return {**result, "result": "WRITE_FAILED", "reason": remote[1] if isinstance(remote, tuple) else (remote.stderr or "substrate creation failed").strip()}
+        return _recover_activation(plan, config_path, db_path, runner,
+                                   remote[1] if isinstance(remote, tuple) else (remote.stderr or "substrate creation failed").strip(),
+                                   result)
     check = _remote(runner, plan.target_identity, "cat \"$HOME/.ssh/config\"", transport_spec=spec)
     if isinstance(check, tuple) or check.returncode != 0 or check.stdout != plan.desired_content:
-        return {**result, "result": "WRITE_VERIFICATION_FAILED", "reason": "activation bytes differ"}
+        return _recover_activation(plan, config_path, db_path, runner,
+                                   "activation bytes differ", result)
     return {**result, "result": "WRITE_VERIFIED"}
+
+
+def _recover_activation(plan, config_path, db_path, runner, failure_reason, result):
+    """Classify an ambiguous activation outcome without mutating the target."""
+    spec = resolve_observation_transport(config_path, plan.target_identity, db_path)
+    if not spec:
+        return {**result, "result": "ACTIVATION_STATE_INDETERMINATE",
+                "commit_state": "COMMIT_OUTCOME_UNKNOWN", "reason": failure_reason,
+                "recovery": "transport unavailable"}
+    state, reason, content, _, _ = _inspect(runner, {"alias": plan.target_identity, "spec": spec})
+    expected = plan.desired_content
+    if plan.action == "INSERT_INCLUDE":
+        original = expected.split(INCLUDE + "\n", 1)[1]
+        original_present = state == "CONFIG_PRESENT" and content == original
+    else:
+        original_present = state == "CONFIG_ABSENT"
+    expected_present = state == "CONFIG_PRESENT" and content == expected and _include_state(content) == "ACTIVE"
+    if expected_present:
+        return {**result, "result": "WRITE_VERIFIED",
+                "commit_state": "COMMITTED_AND_VERIFIED",
+                "reason": "remote commit completed; recovery observed exact expected activation",
+                "recovery": "verified"}
+    if original_present:
+        return {**result, "result": "WRITE_FAILED",
+                "commit_state": "NOT_COMMITTED",
+                "reason": failure_reason,
+                "recovery": "verified original state restored"}
+    return {**result, "result": "ACTIVATION_STATE_INDETERMINATE",
+            "commit_state": "COMMIT_OUTCOME_UNKNOWN", "reason": failure_reason,
+            "recovery": reason or "recovery observed neither exact original nor expected bytes"}
