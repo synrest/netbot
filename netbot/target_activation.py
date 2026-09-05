@@ -109,9 +109,12 @@ class TargetActivationPlan:
     safety: str | None = None
     authorization: str = "not-required"
     config_d_action: str = "NO_CHANGE"
+    transport_spec: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self) | {"managed_path": MANAGED_PATH}
+        result = asdict(self)
+        result.pop("transport_spec", None)
+        return result | {"managed_path": MANAGED_PATH}
 
 
 def _parse_inspection(output: str) -> tuple[str, str | None, list[str], bool]:
@@ -176,7 +179,7 @@ def build_activation_plan(config_path, target_identity: str, *, db_path=None,
     if state == "CONFIG_ABSENT":
         return TargetActivationPlan(target_identity, state, "CREATE_SUBSTRATE",
                                     desired_content=INCLUDE + "\n", transport_source=source,
-                                    transport_alias=target_identity)
+                                    transport_alias=target_identity, transport_spec=spec)
     include = _include_state(content or "")
     if include == "ACTIVE":
         return TargetActivationPlan(target_identity, "ACTIVE", "NO_CHANGE",
@@ -195,7 +198,8 @@ def build_activation_plan(config_path, target_identity: str, *, db_path=None,
                                     transport_source=source, transport_alias=target_identity,
                                     safety="EXISTING_CONFIG_SAFE_FOR_INCLUDE",
                                     authorization="supplied",
-                                    config_d_action="CREATE" if not directory_present else "NO_CHANGE")
+                                    config_d_action="CREATE" if not directory_present else "NO_CHANGE",
+                                    transport_spec=spec)
     return TargetActivationPlan(target_identity, include, "BLOCKED",
                                 reason="existing human SSH config requires explicit operator authorization",
                                 transport_source=source, transport_alias=target_identity,
@@ -208,8 +212,8 @@ def activate_target(plan: TargetActivationPlan, config_path, *, db_path=None,
     result = plan.as_dict()
     if plan.action not in {"CREATE_SUBSTRATE", "INSERT_INCLUDE"}:
         return result
-    spec = resolve_observation_transport(config_path, plan.target_identity, db_path)
-    if not spec:
+    spec = plan.transport_spec
+    if plan.transport_source == "verified-bootstrap-ordinary-ssh" and not spec:
         return {**result, "result": "UNAVAILABLE", "reason": "verified target transport unavailable"}
     command = CREATE_COMMAND
     if plan.action == "INSERT_INCLUDE":
@@ -245,11 +249,7 @@ def activate_target(plan: TargetActivationPlan, config_path, *, db_path=None,
 
 def _recover_activation(plan, config_path, db_path, runner, failure_reason, result):
     """Classify an ambiguous activation outcome without mutating the target."""
-    spec = resolve_observation_transport(config_path, plan.target_identity, db_path)
-    if not spec:
-        return {**result, "result": "ACTIVATION_STATE_INDETERMINATE",
-                "commit_state": "COMMIT_OUTCOME_UNKNOWN", "reason": failure_reason,
-                "recovery": "transport unavailable"}
+    spec = plan.transport_spec
     state, reason, content, _, _ = _inspect(runner, {"alias": plan.target_identity, "spec": spec})
     expected = plan.desired_content
     if plan.action == "INSERT_INCLUDE":

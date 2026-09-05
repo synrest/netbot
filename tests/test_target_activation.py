@@ -27,6 +27,21 @@ class ActivationRunner:
 
 
 class TargetActivationTests(unittest.TestCase):
+    def test_live_activation_uses_planned_normal_alias_without_bootstrap(self):
+        original = "Host *\n    User rafael\n"
+        expected = INCLUDE + "\n" + original
+        plan = TargetActivationPlan("kiroshi", "READY", "INSERT_INCLUDE",
+                                    desired_content=expected,
+                                    transport_alias="kiroshi",
+                                    transport_source="normal-alias")
+        runner = ActivationRunner(expected)
+        result = activate_target(plan, Path("topology.yaml"), runner=runner)
+        self.assertEqual(result["result"], "WRITE_VERIFIED")
+        self.assertGreaterEqual(len(runner.calls), 2)
+        self.assertEqual(runner.calls[0][0][0:2], ["ssh", "-o"])
+        self.assertIn("kiroshi", runner.calls[0][0])
+        self.assertNotIn("-i", runner.calls[0][0])
+
     def test_absent_config_plans_create_substrate(self):
         output = "NETBOT_CONFIG_ABSENT\nNETBOT_CONFIG_D_ABSENT\n"
         with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
@@ -123,7 +138,8 @@ class TargetActivationTests(unittest.TestCase):
         original = "Host *\n    User rafael\n"
         expected = INCLUDE + "\n" + original
         plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE", desired_content=expected,
-                                    transport_alias="netbot-test")
+                                    transport_alias="netbot-test", transport_spec=SPEC,
+                                    transport_source="verified-bootstrap-ordinary-ssh")
         class RecoveryRunner:
             def __init__(self): self.calls = 0
             def __call__(self, command, **kwargs):
@@ -139,7 +155,8 @@ class TargetActivationTests(unittest.TestCase):
         original = "Host *\n    User rafael\n"
         expected = INCLUDE + "\n" + original
         plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE", desired_content=expected,
-                                    transport_alias="netbot-test")
+                                    transport_alias="netbot-test", transport_spec=SPEC,
+                                    transport_source="verified-bootstrap-ordinary-ssh")
         class RecoveryRunner:
             def __init__(self): self.calls = 0
             def __call__(self, command, **kwargs):
@@ -155,7 +172,8 @@ class TargetActivationTests(unittest.TestCase):
         original = "Host *\n    User rafael\n"
         plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
                                     desired_content=INCLUDE + "\n" + original,
-                                    transport_alias="netbot-test")
+                                    transport_alias="netbot-test", transport_spec=SPEC,
+                                    transport_source="verified-bootstrap-ordinary-ssh")
         class UnavailableRunner:
             def __call__(self, command, **kwargs): return (None, "connection lost")
         with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
@@ -176,7 +194,8 @@ class TargetActivationTests(unittest.TestCase):
     def test_remote_verified_rollback_is_explicit(self):
         plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
                                     desired_content=INCLUDE + "\nHost *\n",
-                                    transport_alias="netbot-test")
+                                    transport_alias="netbot-test", transport_spec=SPEC,
+                                    transport_source="verified-bootstrap-ordinary-ssh")
         runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 48, "", "")
         with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
             result = activate_target(plan, Path("topology.yaml"), runner=runner)
@@ -185,7 +204,8 @@ class TargetActivationTests(unittest.TestCase):
     def test_remote_concurrent_rollback_is_first_class(self):
         plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
                                     desired_content=INCLUDE + "\nHost *\n",
-                                    transport_alias="netbot-test")
+                                    transport_alias="netbot-test", transport_spec=SPEC,
+                                    transport_source="verified-bootstrap-ordinary-ssh")
         runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 50, "", "")
         with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
             result = activate_target(plan, Path("topology.yaml"), runner=runner)
@@ -194,7 +214,8 @@ class TargetActivationTests(unittest.TestCase):
     def test_remote_rollback_failure_is_first_class(self):
         plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
                                     desired_content=INCLUDE + "\nHost *\n",
-                                    transport_alias="netbot-test")
+                                    transport_alias="netbot-test", transport_spec=SPEC,
+                                    transport_source="verified-bootstrap-ordinary-ssh")
         runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 49, "", "")
         with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
             result = activate_target(plan, Path("topology.yaml"), runner=runner)
