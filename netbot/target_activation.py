@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+import hashlib
+import shlex
 from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
@@ -10,7 +12,11 @@ from .apply_target import MANAGED_PATH, _remote, resolve_observation_transport
 
 INCLUDE = "Include ~/.ssh/config.d/*"
 CONFIG_PATH = "~/.ssh/config"
-INSPECT_COMMAND = '''if [ -f "$HOME/.ssh/config" ]; then echo NETBOT_CONFIG_PRESENT; cat "$HOME/.ssh/config"; else echo NETBOT_CONFIG_ABSENT; fi
+INSPECT_COMMAND = '''if [ -L "$HOME/.ssh" ] || [ -L "$HOME/.ssh/config" ]; then exit 43; fi
+if [ -e "$HOME/.ssh/config" ] && [ ! -f "$HOME/.ssh/config" ]; then exit 46; fi
+if [ -L "$HOME/.ssh/config.d" ]; then exit 44; fi
+if [ -e "$HOME/.ssh/config.d" ] && [ ! -d "$HOME/.ssh/config.d" ]; then exit 45; fi
+if [ -f "$HOME/.ssh/config" ]; then echo NETBOT_CONFIG_PRESENT; cat "$HOME/.ssh/config"; else echo NETBOT_CONFIG_ABSENT; fi
 if [ -d "$HOME/.ssh/config.d" ]; then echo NETBOT_CONFIG_D_PRESENT; ls -1 "$HOME/.ssh/config.d"; else echo NETBOT_CONFIG_D_ABSENT; fi'''
 CREATE_COMMAND = '''set -eu
 if [ -e "$HOME/.ssh/config" ]; then exit 42; fi
@@ -27,6 +33,46 @@ trap - EXIT HUP INT TERM
 '''
 
 
+def _insert_command(expected_hash: str, verify_alias: str | None) -> str:
+    alias_check = "true"
+    if verify_alias:
+        alias = shlex.quote(verify_alias)
+        alias_check = f'/usr/bin/ssh -G -F "$HOME/.ssh/config" {alias} >/dev/null 2>&1'
+    expected = shlex.quote(expected_hash)
+    return f'''set -eu
+if [ -L "$HOME/.ssh" ] || [ -L "$HOME/.ssh/config" ]; then exit 43; fi
+if [ ! -f "$HOME/.ssh/config" ]; then exit 42; fi
+if [ -e "$HOME/.ssh/config" ] && [ ! -f "$HOME/.ssh/config" ]; then exit 46; fi
+if [ -L "$HOME/.ssh/config.d" ]; then exit 44; fi
+created_dir=0
+if [ ! -d "$HOME/.ssh/config.d" ]; then mkdir -p "$HOME/.ssh/config.d"; chmod 700 "$HOME/.ssh/config.d"; created_dir=1; fi
+if [ -e "$HOME/.ssh/config.d" ] && [ ! -d "$HOME/.ssh/config.d" ]; then exit 45; fi
+if command -v sha256sum >/dev/null 2>&1; then current_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else current_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
+if [ "$current_hash" != {expected} ]; then [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true; exit 47; fi
+backup=$(mktemp "$HOME/.ssh/.config.netbot.rollback.XXXXXXXX")
+tmp=$(mktemp "$HOME/.ssh/.config.netbot.XXXXXXXX")
+trap 'rm -f "$tmp" "$backup"' EXIT HUP INT TERM
+cp "$HOME/.ssh/config" "$backup"
+umask 077
+cat > "$tmp"
+chmod 600 "$tmp"
+if command -v sha256sum >/dev/null 2>&1; then current_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else current_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
+if [ "$current_hash" != {expected} ]; then
+  mv "$backup" "$HOME/.ssh/config"
+  [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
+  exit 47
+fi
+mv "$tmp" "$HOME/.ssh/config"
+if ! grep -Fqx 'Include ~/.ssh/config.d/*' "$HOME/.ssh/config" || ! {alias_check}; then
+  mv "$backup" "$HOME/.ssh/config"
+  [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
+  exit 48
+fi
+rm -f "$backup"
+trap - EXIT HUP INT TERM
+'''
+
+
 @dataclass(frozen=True)
 class TargetActivationPlan:
     target_identity: str
@@ -37,12 +83,15 @@ class TargetActivationPlan:
     reason: str | None = None
     transport_source: str | None = None
     transport_alias: str | None = None
+    safety: str | None = None
+    authorization: str = "not-required"
+    config_d_action: str = "NO_CHANGE"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self) | {"managed_path": MANAGED_PATH}
 
 
-def _parse_inspection(output: str) -> tuple[str, str | None, list[str]]:
+def _parse_inspection(output: str) -> tuple[str, str | None, list[str], bool]:
     lines = output.splitlines()
     if "NETBOT_CONFIG_ABSENT" in lines:
         config_state, content = "CONFIG_ABSENT", ""
@@ -51,10 +100,10 @@ def _parse_inspection(output: str) -> tuple[str, str | None, list[str]]:
         end = next((i for i in range(start, len(lines)) if lines[i].startswith("NETBOT_CONFIG_D_")), len(lines))
         config_state, content = "CONFIG_PRESENT", "\n".join(lines[start:end]) + ("\n" if end > start else "")
     else:
-        return "UNAVAILABLE", "target config inspection was malformed", []
+        return "UNAVAILABLE", "target config inspection was malformed", [], False
     directory = "NETBOT_CONFIG_D_PRESENT" if "NETBOT_CONFIG_D_PRESENT" in lines else "NETBOT_CONFIG_D_ABSENT"
     names = lines[lines.index(directory) + 1:] if directory in lines else []
-    return config_state, content, names
+    return config_state, content, names, directory == "NETBOT_CONFIG_D_PRESENT"
 
 
 def _include_state(content: str) -> str:
@@ -65,14 +114,16 @@ def _include_state(content: str) -> str:
         if not line:
             continue
         lowered = line.lower()
-        if lowered.startswith(("host ", "match ")):
+        if lowered.startswith("match "):
+            return "INCLUDE_CONFLICT"
+        if lowered.startswith("host "):
             before_match = False
         if lowered.startswith("include "):
             if line == INCLUDE:
                 exact.append(before_match)
-            elif before_match:
-                return "INCLUDE_MISSING"
-    if len(exact) > 1 or (exact and not exact[0]):
+            else:
+                return "INCLUDE_CONFLICT"
+    if exact and not all(exact):
         return "INCLUDE_CONFLICT"
     return "ACTIVE" if exact else "INCLUDE_MISSING"
 
@@ -80,21 +131,22 @@ def _include_state(content: str) -> str:
 def _inspect(runner, transport):
     result = _remote(runner, transport["alias"], INSPECT_COMMAND, transport_spec=transport.get("spec"))
     if isinstance(result, tuple):
-        return "UNAVAILABLE", result[1], ""
+        return "UNAVAILABLE", result[1], "", [], False
     if result.returncode != 0:
-        return "UNAVAILABLE", (result.stderr or "target config inspection failed").strip(), ""
-    state, content, _ = _parse_inspection(result.stdout or "")
+        return "UNAVAILABLE", (result.stderr or "target config inspection failed").strip(), "", [], False
+    state, content, names, directory_present = _parse_inspection(result.stdout or "")
     if state == "UNAVAILABLE":
-        return state, content, ""
-    return state, None, content
+        return state, content, "", names, directory_present
+    return state, None, content, names, directory_present
 
 
 def build_activation_plan(config_path, target_identity: str, *, db_path=None,
-                          runner: Callable[..., Any] = subprocess.run) -> TargetActivationPlan:
+                          runner: Callable[..., Any] = subprocess.run,
+                          authorize_existing_config: bool = False) -> TargetActivationPlan:
     spec = resolve_observation_transport(config_path, target_identity, db_path)
     transport = {"alias": target_identity, "spec": spec}
     source = spec.get("source") if spec else "normal-alias"
-    state, reason, content = _inspect(runner, transport)
+    state, reason, content, names, directory_present = _inspect(runner, transport)
     if state == "UNAVAILABLE":
         return TargetActivationPlan(target_identity, state, "BLOCKED", reason=reason,
                                     transport_source=source, transport_alias=target_identity)
@@ -106,20 +158,42 @@ def build_activation_plan(config_path, target_identity: str, *, db_path=None,
     if include == "ACTIVE":
         return TargetActivationPlan(target_identity, "ACTIVE", "NO_CHANGE",
                                     transport_source=source, transport_alias=target_identity)
+    if include == "INCLUDE_CONFLICT":
+        return TargetActivationPlan(target_identity, include, "BLOCKED",
+                                    reason="existing SSH config has unsupported or unsafe Include ordering",
+                                    transport_source=source, transport_alias=target_identity,
+                                    safety="EXISTING_CONFIG_INCLUDE_ORDER_CONFLICT",
+                                    authorization="supplied" if authorize_existing_config else "not-supplied")
+    if authorize_existing_config:
+        desired = INCLUDE + "\n" + (content or "")
+        return TargetActivationPlan(target_identity, "READY", "INSERT_INCLUDE",
+                                    desired_content=desired,
+                                    reason="operator authorized safe top-of-file Include insertion",
+                                    transport_source=source, transport_alias=target_identity,
+                                    safety="EXISTING_CONFIG_SAFE_FOR_INCLUDE",
+                                    authorization="supplied",
+                                    config_d_action="CREATE" if not directory_present else "NO_CHANGE")
     return TargetActivationPlan(target_identity, include, "BLOCKED",
                                 reason="existing human SSH config requires explicit operator authorization",
-                                transport_source=source, transport_alias=target_identity)
+                                transport_source=source, transport_alias=target_identity,
+                                safety="EXISTING_CONFIG_SAFE_FOR_INCLUDE",
+                                authorization="required")
 
 
 def activate_target(plan: TargetActivationPlan, config_path, *, db_path=None,
                     runner: Callable[..., Any] = subprocess.run) -> dict[str, Any]:
     result = plan.as_dict()
-    if plan.action != "CREATE_SUBSTRATE":
+    if plan.action not in {"CREATE_SUBSTRATE", "INSERT_INCLUDE"}:
         return result
     spec = resolve_observation_transport(config_path, plan.target_identity, db_path)
     if not spec:
         return {**result, "result": "UNAVAILABLE", "reason": "verified target transport unavailable"}
-    remote = _remote(runner, plan.target_identity, CREATE_COMMAND, transport_spec=spec)
+    command = CREATE_COMMAND
+    if plan.action == "INSERT_INCLUDE":
+        current_hash = hashlib.sha256((plan.desired_content.split(INCLUDE + "\n", 1)[1]).encode()).hexdigest()
+        command = _insert_command(current_hash, plan.transport_alias)
+    remote = _remote(runner, plan.target_identity, command, input_text=plan.desired_content if plan.action == "INSERT_INCLUDE" else None,
+                     transport_spec=spec)
     if isinstance(remote, tuple) or remote.returncode != 0:
         return {**result, "result": "WRITE_FAILED", "reason": remote[1] if isinstance(remote, tuple) else (remote.stderr or "substrate creation failed").strip()}
     check = _remote(runner, plan.target_identity, "cat \"$HOME/.ssh/config\"", transport_spec=spec)

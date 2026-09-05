@@ -28,7 +28,7 @@ from .target_activation import build_activation_plan, activate_target
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","diff","reconcile","sync","inspect","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","diff","reconcile","sync","inspect","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--authorize-existing-config",action="store_true",help="authorize one safe Include insertion into an existing SSH config"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.command == "enroll":
         if len(raw_argv) != 1:
             p.error("usage: netbot enroll")
@@ -112,7 +112,8 @@ def main(argv=None):
         if a.host == "activate-target":
             if not a.target:
                 p.error("usage: netbot ssh activate-target TARGET [--dry-run]")
-            plan = build_activation_plan(a.config, a.target, db_path=a.db)
+            plan = build_activation_plan(a.config, a.target, db_path=a.db,
+                                         authorize_existing_config=getattr(a, "authorize_existing_config", False))
             print(json.dumps(plan.as_dict() if a.dry_run else activate_target(plan, a.config, db_path=a.db),
                              indent=2, sort_keys=True))
             return

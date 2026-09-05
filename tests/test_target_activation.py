@@ -47,11 +47,53 @@ class TargetActivationTests(unittest.TestCase):
             plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test", runner=ActivationRunner(output))
         self.assertEqual((plan.state, plan.action), ("INCLUDE_MISSING", "BLOCKED"))
 
+    def test_existing_config_authorized_plans_top_level_insertion(self):
+        content = "Host *\n    User rafael\n\nHost oracle\n    User rafael\n"
+        output = "NETBOT_CONFIG_PRESENT\n" + content + "NETBOT_CONFIG_D_ABSENT\n"
+        with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test",
+                                         runner=ActivationRunner(output),
+                                         authorize_existing_config=True)
+        self.assertEqual((plan.state, plan.action), ("READY", "INSERT_INCLUDE"))
+        self.assertEqual(plan.safety, "EXISTING_CONFIG_SAFE_FOR_INCLUDE")
+        self.assertEqual(plan.config_d_action, "CREATE")
+        self.assertEqual(plan.desired_content, INCLUDE + "\n" + content)
+
+    def test_existing_config_authorized_activation_is_verified(self):
+        content = "Host *\n    User rafael\n"
+        inspect = "NETBOT_CONFIG_PRESENT\n" + content + "NETBOT_CONFIG_D_ABSENT\n"
+        class InsertRunner:
+            def __init__(self):
+                self.calls = []
+                self.current = None
+            def __call__(self, command, **kwargs):
+                self.calls.append((command, kwargs))
+                if "rollback" in command[-1]:
+                    self.current = kwargs["input"]
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, 0, self.current or inspect, "")
+        runner = InsertRunner()
+        with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test",
+                                         runner=ActivationRunner(inspect),
+                                         authorize_existing_config=True)
+            result = activate_target(plan, Path(d) / "topology.yaml", runner=runner)
+        self.assertEqual(result["result"], "WRITE_VERIFIED")
+        self.assertEqual(runner.current, plan.desired_content)
+        self.assertIn("sha256sum", runner.calls[0][0][-1])
+        self.assertIn("mv \"$tmp\" \"$HOME/.ssh/config\"", runner.calls[0][0][-1])
+
     def test_include_after_host_is_conflict(self):
         output = "NETBOT_CONFIG_PRESENT\nHost human\nInclude ~/.ssh/config.d/*\nNETBOT_CONFIG_D_PRESENT\n"
         with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
             plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test", runner=ActivationRunner(output))
         self.assertEqual((plan.state, plan.action), ("INCLUDE_CONFLICT", "BLOCKED"))
+
+    def test_duplicate_safe_include_is_idempotent(self):
+        output = "NETBOT_CONFIG_PRESENT\nInclude ~/.ssh/config.d/*\nInclude ~/.ssh/config.d/*\nHost human\nNETBOT_CONFIG_D_PRESENT\n"
+        with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test", runner=ActivationRunner(output))
+        self.assertEqual((plan.state, plan.action), ("ACTIVE", "NO_CHANGE"))
 
     def test_create_is_exact_and_verified(self):
         inspect = ActivationRunner("NETBOT_CONFIG_ABSENT\nNETBOT_CONFIG_D_ABSENT\n")
