@@ -165,9 +165,28 @@ class TargetActivationTests(unittest.TestCase):
 
     def test_insert_transaction_contains_rollback_verification(self):
         from netbot.target_activation import _insert_command
-        command = _insert_command("a" * 64, "netbot-test")
-        self.assertIn("mv \"$backup\" \"$HOME/.ssh/config\"", command)
+        command = _insert_command("a" * 64, "b" * 64, "netbot-test")
+        self.assertIn("mv \"$restore_tmp\" \"$HOME/.ssh/config\"", command)
+        self.assertNotIn("mv \"$backup\" \"$HOME/.ssh/config\"", command)
         self.assertIn("restored_hash", command)
+
+    def test_remote_concurrent_rollback_is_first_class(self):
+        plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
+                                    desired_content=INCLUDE + "\nHost *\n",
+                                    transport_alias="netbot-test")
+        runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 50, "", "")
+        with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            result = activate_target(plan, Path("topology.yaml"), runner=runner)
+        self.assertEqual(result["result"], "ACTIVATION_ROLLBACK_BLOCKED_BY_CONCURRENT_CHANGE")
+
+    def test_remote_rollback_failure_is_first_class(self):
+        plan = TargetActivationPlan("netbot-test", "READY", "INSERT_INCLUDE",
+                                    desired_content=INCLUDE + "\nHost *\n",
+                                    transport_alias="netbot-test")
+        runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 49, "", "")
+        with patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            result = activate_target(plan, Path("topology.yaml"), runner=runner)
+        self.assertEqual(result["result"], "ACTIVATION_ROLLBACK_FAILED")
 
 
 if __name__ == "__main__":

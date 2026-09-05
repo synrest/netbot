@@ -33,12 +33,13 @@ trap - EXIT HUP INT TERM
 '''
 
 
-def _insert_command(expected_hash: str, verify_alias: str | None) -> str:
+def _insert_command(expected_hash: str, original_hash: str, verify_alias: str | None) -> str:
     alias_check = "true"
     if verify_alias:
         alias = shlex.quote(verify_alias)
         alias_check = f'/usr/bin/ssh -G -F "$HOME/.ssh/config" {alias} >/dev/null 2>&1'
     expected = shlex.quote(expected_hash)
+    original = shlex.quote(original_hash)
     return f'''set -eu
 if [ -L "$HOME/.ssh" ] || [ -L "$HOME/.ssh/config" ]; then exit 43; fi
 if [ ! -f "$HOME/.ssh/config" ]; then exit 42; fi
@@ -58,15 +59,25 @@ cat > "$tmp"
 chmod 600 "$tmp"
 if command -v sha256sum >/dev/null 2>&1; then current_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else current_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
 if [ "$current_hash" != {expected} ]; then
-  mv "$backup" "$HOME/.ssh/config"
   [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
   exit 47
 fi
 mv "$tmp" "$HOME/.ssh/config"
 if ! grep -Fqx 'Include ~/.ssh/config.d/*' "$HOME/.ssh/config" || ! {alias_check}; then
-  mv "$backup" "$HOME/.ssh/config"
+  if [ -L "$HOME/.ssh/config" ] || [ ! -f "$HOME/.ssh/config" ]; then exit 51; fi
+  if command -v sha256sum >/dev/null 2>&1; then current_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else current_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
+  if [ "$current_hash" = {original} ]; then
+    [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
+    exit 48
+  fi
+  if [ "$current_hash" != {expected} ]; then exit 50; fi
+  restore_tmp=$(mktemp "$HOME/.ssh/.config.netbot.restore.XXXXXXXX")
+  cp "$backup" "$restore_tmp"
+  chmod 600 "$restore_tmp"
+  mv "$restore_tmp" "$HOME/.ssh/config"
   if command -v sha256sum >/dev/null 2>&1; then restored_hash=$(sha256sum "$HOME/.ssh/config" | awk '{{print $1}}'); else restored_hash=$(shasum -a 256 "$HOME/.ssh/config" | awk '{{print $1}}'); fi
-  if [ "$restored_hash" != {expected} ]; then exit 49; fi
+  if [ "$restored_hash" != {original} ]; then exit 49; fi
+  if ! {alias_check}; then exit 49; fi
   [ "$created_dir" -eq 0 ] || rmdir "$HOME/.ssh/config.d" 2>/dev/null || true
   exit 48
 fi
@@ -192,11 +203,22 @@ def activate_target(plan: TargetActivationPlan, config_path, *, db_path=None,
         return {**result, "result": "UNAVAILABLE", "reason": "verified target transport unavailable"}
     command = CREATE_COMMAND
     if plan.action == "INSERT_INCLUDE":
-        current_hash = hashlib.sha256((plan.desired_content.split(INCLUDE + "\n", 1)[1]).encode()).hexdigest()
-        command = _insert_command(current_hash, plan.transport_alias)
+        original_content = plan.desired_content.split(INCLUDE + "\n", 1)[1]
+        current_hash = hashlib.sha256(plan.desired_content.encode()).hexdigest()
+        original_hash = hashlib.sha256(original_content.encode()).hexdigest()
+        command = _insert_command(current_hash, original_hash, plan.transport_alias)
     remote = _remote(runner, plan.target_identity, command, input_text=plan.desired_content if plan.action == "INSERT_INCLUDE" else None,
                      transport_spec=spec)
     if isinstance(remote, tuple) or remote.returncode != 0:
+        remote_code = None if isinstance(remote, tuple) else remote.returncode
+        if remote_code == 50:
+            return {**result, "result": "ACTIVATION_ROLLBACK_BLOCKED_BY_CONCURRENT_CHANGE",
+                    "rollback_state": "ACTIVATION_ROLLBACK_BLOCKED_BY_CONCURRENT_CHANGE",
+                    "reason": "rollback refused because human SSH config changed during activation"}
+        if remote_code == 49:
+            return {**result, "result": "ACTIVATION_ROLLBACK_FAILED",
+                    "rollback_state": "ACTIVATION_ROLLBACK_FAILED",
+                    "reason": "rollback was attempted but exact restoration or verification failed"}
         return _recover_activation(plan, config_path, db_path, runner,
                                    remote[1] if isinstance(remote, tuple) else (remote.stderr or "substrate creation failed").strip(),
                                    result)
