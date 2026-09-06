@@ -36,7 +36,7 @@ from .scheduler import install as scheduler_install, remove as scheduler_remove,
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","discovery","diff","reconcile","maintain","cycle","sync","inspect","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service","scheduler"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--target",dest="target_filter"); p.add_argument("--type",dest="proposal_type"); p.add_argument("--node",dest="proposal_node"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--expected-sha256"); p.add_argument("--interval",default="30m"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--authorize-existing-config",action="store_true",help="authorize one safe Include insertion into an existing SSH config"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","discovery","diff","reconcile","maintain","cycle","sync","inspect","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service","scheduler"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--target",dest="target_filter"); p.add_argument("--type",dest="proposal_type"); p.add_argument("--node",dest="proposal_node"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--expected-sha256"); p.add_argument("--interval",default="30m"); p.add_argument("--executable",dest="executable"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--authorize-existing-config",action="store_true",help="authorize one safe Include insertion into an existing SSH config"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.command == "enroll":
         if len(raw_argv) != 1:
             p.error("usage: netbot enroll")
@@ -60,12 +60,15 @@ def main(argv=None):
     if a.command == "scheduler":
         if a.host not in {"install", "status", "remove"} or a.target or a.candidate:
             p.error("usage: netbot scheduler {install|status|remove} [--interval 30m] [--dry-run]")
-        if a.host == "install":
-            result = scheduler_install(interval=a.interval, dry_run=a.dry_run)
-        elif a.host == "remove":
-            result = scheduler_remove(dry_run=a.dry_run)
-        else:
-            result = scheduler_status()
+        try:
+            if a.host == "install":
+                result = scheduler_install(interval=a.interval, executable=a.executable, dry_run=a.dry_run)
+            elif a.host == "remove":
+                result = scheduler_remove(dry_run=a.dry_run)
+            else:
+                result = scheduler_status()
+        except ValueError as exc:
+            result = {"result": "INCOMPATIBLE_EXECUTABLE", "reason": str(exc)}
         print(json.dumps(result, indent=2, sort_keys=True))
         return
     if a.command == "discovery":

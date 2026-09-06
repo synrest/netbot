@@ -26,6 +26,21 @@ class SchedulerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scheduler.interval_seconds("4m")
 
+    def test_incompatible_path_launcher_is_rejected(self):
+        with patch("netbot.scheduler.shutil.which", return_value="/usr/local/bin/netbot"), \
+             patch("netbot.scheduler.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "usage: netbot {version,reconcile}"
+            with self.assertRaises(ValueError):
+                scheduler.resolve_executable()
+
+    def test_compatible_path_launcher_is_accepted(self):
+        with patch("netbot.scheduler.shutil.which", return_value="/usr/local/bin/netbot"), \
+             patch("netbot.scheduler.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "usage: netbot {maintain,scheduler}"
+            self.assertEqual(scheduler.resolve_executable(), ["/usr/local/bin/netbot"])
+
     def test_install_dry_run_does_not_write(self):
         with tempfile.TemporaryDirectory() as d:
             result = scheduler.install(home=Path(d), platform_name="linux", executable="/opt/netbot", dry_run=True, native=False)

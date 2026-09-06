@@ -48,14 +48,29 @@ def paths(home: Path | None = None, *, platform_name: str | None = None) -> dict
     return {}
 
 
-def resolve_executable(executable: str | Path | None = None) -> list[str]:
+def resolve_executable(executable: str | Path | None = None, *, validate_path: bool = True) -> list[str]:
     if executable:
         path = Path(executable)
         if not path.is_absolute():
             raise ValueError("scheduler executable must be absolute")
         return [str(path)]
+    configured = os.environ.get("NETBOT_SCHEDULER_EXECUTABLE")
+    if configured:
+        path = Path(configured)
+        if not path.is_absolute():
+            raise ValueError("NETBOT_SCHEDULER_EXECUTABLE must be absolute")
+        return [str(path)]
     found = shutil.which("netbot")
+    if found and Path(found).is_absolute() and not validate_path:
+        return [found]
     if found and Path(found).is_absolute():
+        try:
+            probe = subprocess.run([found, "--help"], text=True, capture_output=True,
+                                   timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(f"PATH netbot launcher could not be validated: {exc}") from exc
+        if probe.returncode != 0 or "maintain" not in probe.stdout:
+            raise ValueError("PATH netbot launcher does not support the maintain command; provide an explicit stable launcher")
         return [found]
     interpreter = Path(sys.executable).resolve()
     if not interpreter.is_absolute():
@@ -156,10 +171,9 @@ def remove(*, home: Path | None = None, platform_name: str | None = None,
     if platform_name not in {"darwin", "linux"}:
         return {"result": "UNSUPPORTED", "platform": platform_name}
     paths_ = paths(home, platform_name=platform_name)
-    rendered = render(platform_name, home=home)
-    for key, data in rendered.items():
-        if paths_[key].exists() and not _marked(paths_[key]):
-            return {"result": "CONFLICT", "platform": platform_name, "artifacts": [str(paths_[key])]}
+    for key, path in paths_.items():
+        if (path.exists() or path.is_symlink()) and not _marked(path):
+            return {"result": "CONFLICT", "platform": platform_name, "artifacts": [str(path)]}
     if dry_run:
         return {"result": "WOULD_REMOVE", "platform": platform_name, "artifacts": [str(p) for p in paths_.values()]}
     native_result = _native(platform_name, "remove", paths_) if native else {"ok": True, "action": "skipped"}
@@ -187,9 +201,8 @@ def status(*, home: Path | None = None, platform_name: str | None = None) -> dic
                 break
         result = subprocess.run(["systemctl", "--user", "is-enabled", TIMER], capture_output=True, text=True, check=False)
         enabled = result.returncode == 0
-    rendered = render(platform_name, home=home) if platform_name in {"darwin", "linux"} else {}
     owned = bool(present) and all(_marked(paths_[key]) for key in paths_)
     return {"platform": platform_name, "backend": backend, "installed": all(present.values()) if present else False,
             "ownership": "OWNED" if owned else "ABSENT_OR_CONFLICT",
-            "configured_interval": configured_interval or "30m", "executable": resolve_executable()[0],
+            "configured_interval": configured_interval or "30m", "executable": resolve_executable(validate_path=False)[0],
             "artifact_paths": {key: str(path) for key, path in paths_.items()}, "present": present, "enabled": enabled}
