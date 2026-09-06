@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from .provider import TailscaleProvider
 from .seed import discover_local_ssh
+from .crawl import RemoteSSHSeedObserver, crawl
 from ..state import State
 
 
@@ -38,6 +39,7 @@ def run_cycle(config_path: Path, db_path: Path, *, home: Path | None = None,
         provider = provider or TailscaleProvider()
         peers, provider_error = provider.observe()
         ssh = discover_local_ssh(home, peers, runner=runner or subprocess.run)
+        graph = crawl(controller_id, ssh, RemoteSSHSeedObserver(runner=runner or subprocess.run))
         status = "PARTIAL" if provider_error else "OK"
         local_peer = next((peer.as_dict() for peer in peers
                            if peer.metadata.get("_netbot_self")), None)
@@ -46,7 +48,7 @@ def run_cycle(config_path: Path, db_path: Path, *, home: Path | None = None,
                   "controller": local_peer,
                   "provider": {"name": provider.name, "error": provider_error,
                                "peers": [peer.as_dict() for peer in peers]},
-                  "ssh": ssh}
+                  "ssh": ssh, "crawl": graph.as_dict()}
         if not dry_run:
             state = State(db_path)
             rows = [{"identity": peer.advertised_name, "provider": peer.provider,

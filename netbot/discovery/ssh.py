@@ -6,19 +6,35 @@ def inspect_ssh(home: Path, exclude_managed=True) -> tuple[list[SSHHost], list[d
     config = home / ".ssh" / "config"; files = [config]
     config_dir = home / ".ssh" / "config.d"
     if config_dir.is_dir(): files += sorted(config_dir.glob("*"))
-    hosts = []; current = None; includes = []
+    sources = []
     for path in files:
         if not path.is_file(): continue
         if exclude_managed and path.name.startswith("50-netbot.conf"): continue
-        for raw in path.read_text(errors="replace").splitlines():
+        try:
+            sources.append((str(path), path.read_text(errors="replace")))
+        except OSError:
+            continue
+    return parse_ssh_config_sources(sources, exclude_managed=exclude_managed)
+
+
+def parse_ssh_config_sources(sources, exclude_managed=True) -> tuple[list[SSHHost], list[dict]]:
+    """Parse explicit Host claims from named config text sources.
+
+    This is lexical discovery only; effective OpenSSH semantics remain the
+    responsibility of ``effective_config``.
+    """
+    hosts = []; current = None; includes = []
+    for source, text in sources:
+        if exclude_managed and Path(source).name.startswith("50-netbot.conf"): continue
+        for raw in text.splitlines():
             line = raw.strip()
             if not line or line.startswith("#"): continue
             parts = line.split(None, 1)
             if len(parts) != 2: continue
             key, value = parts
-            if key.lower() == "include": includes.append({"path": value, "source": str(path)})
+            if key.lower() == "include": includes.append({"path": value, "source": str(source)})
             elif key.lower() == "host":
-                if "*" not in value and "?" not in value: current = SSHHost(value, source=str(path)); hosts.append(current)
+                if "*" not in value and "?" not in value: current = SSHHost(value, source=str(source)); hosts.append(current)
                 else: current = None
             elif current:
                 low = key.lower()

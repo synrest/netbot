@@ -6,9 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from netbot.discovery.cycle import run_cycle
+from netbot.discovery.crawl import RemoteSourceObservation, crawl
 from netbot.discovery.provider import DiscoveredPeer
 from netbot.discovery.seed import (AUTH_PASSWORD, AUTH_PUBLIC_KEY, AUTH_UNKNOWN,
-                                   discover_local_ssh)
+                                   AUTH_UNAVAILABLE, discover_local_ssh)
 
 
 class FakeRunner:
@@ -97,7 +98,8 @@ Host human
         self.assertEqual(result["status"], "OK")
         self.assertTrue(result["dry_run"])
         self.assertIn("human_aliases", result["ssh"])
-        self.assertFalse(any("config.d" in " ".join(command) for command in runner.commands))
+        self.assertFalse(any(any(token in " ".join(command) for token in ("mkdir", "mv", "rm ", "cat >"))
+                             for command in runner.commands))
 
         runtime = root / "locked-run"
         runtime.mkdir()
@@ -116,6 +118,65 @@ Host human
         result = run_cycle(config, root / "db.sqlite3", home=root, provider=provider, runner=FakeRunner())
         self.assertEqual(result["status"], "PARTIAL")
         self.assertEqual(result["provider"]["error"], "socket unavailable")
+
+    def seed(self, *items):
+        return {"human_aliases": [dict(alias=alias, provenance="SSH_CONFIG_HUMAN",
+                                        source="config", effective={"hostname": destination},
+                                        correlation={"provider_node_id": destination},
+                                        auth_state=auth, auth_evidence="fixture")
+                              for alias, destination, auth in items],
+                "managed_aliases": [], "unresolved_provider_peers": []}
+
+    def remote(self, mapping):
+        class Observer:
+            def observe(self, source):
+                return mapping.get(source, RemoteSourceObservation(source, (), status="SOURCE_UNAVAILABLE"))
+        return Observer()
+
+    def edge(self, source, alias, destination, auth="UNKNOWN"):
+        from netbot.discovery.seed import SSHSeed
+        return SSHSeed(alias, "SSH_CONFIG_HUMAN", "remote-config",
+                       {"hostname": destination, "user": "zero", "port": 22},
+                       {"provider_node_id": destination}, auth, "fixture")
+
+    def test_recursive_crawl_records_directed_edges_and_depth(self):
+        mapping = {
+            "b": RemoteSourceObservation("b", (self.edge("b", "c", "c", AUTH_PUBLIC_KEY),)),
+            "c": RemoteSourceObservation("c", (self.edge("c", "a", "a"),)),
+        }
+        graph = crawl("a", self.seed(("b", "b", AUTH_PUBLIC_KEY)), self.remote(mapping), max_depth=3)
+        self.assertEqual([(x.source, x.destination) for x in graph.relationships],
+                         [("a", "b"), ("b", "c"), ("c", "a")])
+        self.assertEqual(len(graph.sources), 2)
+
+    def test_password_and_unavailable_edges_are_not_crawl_sources(self):
+        graph = crawl("a", self.seed(("password", "p", "PASSWORD_GATED"),
+                                      ("offline", "o", AUTH_UNAVAILABLE)), self.remote({}))
+        self.assertEqual(graph.sources, [])
+        self.assertEqual(len(graph.relationships), 2)
+
+    def test_duplicate_source_is_visited_once_and_budget_truncates(self):
+        mapping = {"b": RemoteSourceObservation("b", (self.edge("b", "c", "c", AUTH_PUBLIC_KEY),))}
+        graph = crawl("a", self.seed(("b", "b", AUTH_PUBLIC_KEY), ("b2", "b", AUTH_PUBLIC_KEY)),
+                      self.remote(mapping), max_nodes=1)
+        self.assertEqual(len(graph.sources), 1)
+        self.assertTrue(graph.truncated)
+
+    def test_cycle_does_not_revisit_source(self):
+        mapping = {
+            "b": RemoteSourceObservation("b", (self.edge("b", "a", "a", AUTH_PUBLIC_KEY),)),
+            "a": RemoteSourceObservation("a", (self.edge("a", "b", "b", AUTH_PUBLIC_KEY),)),
+        }
+        graph = crawl("a", self.seed(("b", "b", AUTH_PUBLIC_KEY)), self.remote(mapping))
+        self.assertEqual([x["source"] for x in graph.sources], ["b"])
+
+    def test_operation_failure_isolated_from_graph(self):
+        graph = crawl("a", self.seed(("bad", "bad", AUTH_PUBLIC_KEY),
+                                      ("good", "good", AUTH_PUBLIC_KEY)),
+                      self.remote({"bad": RemoteSourceObservation("bad", (), status="SOURCE_INSPECTION_FAILED"),
+                                   "good": RemoteSourceObservation("good", (), status="OBSERVED")}))
+        self.assertEqual(len(graph.sources), 2)
+        self.assertEqual(graph.sources[0]["status"], "SOURCE_INSPECTION_FAILED")
 
 
 if __name__ == "__main__":
