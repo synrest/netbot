@@ -172,5 +172,109 @@ class State:
         self.db.commit()
     def close(self):
         self.db.close()
+
+    def record_discovery_cycle(self, run_id, controller_id, started_at, completed_at,
+                               status, provider_status, crawl_status, truncation_reason,
+                               graph, provider_peers):
+        """Atomically persist one discovery cycle and its evidence graph."""
+        self.db.executescript("""
+        CREATE TABLE IF NOT EXISTS discovery_runs(
+          run_id TEXT PRIMARY KEY, controller_id TEXT NOT NULL, started_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL, status TEXT NOT NULL, provider_status TEXT NOT NULL,
+          crawl_status TEXT NOT NULL, truncation_reason TEXT, summary_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS discovery_node_evidence(
+          id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, evidence_key TEXT NOT NULL,
+          observed_from TEXT NOT NULL, provider TEXT, provider_node_id TEXT,
+          advertised_name TEXT, addresses_json TEXT NOT NULL, online TEXT,
+          metadata_json TEXT NOT NULL, observed_at TEXT, topology_identity TEXT,
+          UNIQUE(run_id, evidence_key, observed_from));
+        CREATE TABLE IF NOT EXISTS discovery_relationship_evidence(
+          id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, source TEXT NOT NULL,
+          destination TEXT NOT NULL, alias TEXT NOT NULL, effective_json TEXT NOT NULL,
+          auth_state TEXT NOT NULL, provenance TEXT NOT NULL, observed_from TEXT NOT NULL,
+          evidence TEXT, observed_at TEXT NOT NULL,
+          UNIQUE(run_id, source, destination, alias, observed_from, effective_json, auth_state));
+        """)
+        import json
+        self.db.execute("BEGIN")
+        try:
+            summary = {"nodes": len(graph.get("nodes", [])),
+                       "relationships": len(graph.get("relationships", [])),
+                       "sources": len(graph.get("sources", []))}
+            self.db.execute("INSERT INTO discovery_runs(run_id,controller_id,started_at,completed_at,status,provider_status,crawl_status,truncation_reason,summary_json) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (run_id, controller_id, started_at, completed_at, status, provider_status,
+                             crawl_status, truncation_reason, json.dumps(summary, sort_keys=True)))
+            for node in graph.get("nodes", []):
+                key = node["observation_identity"]
+                self.db.execute("INSERT OR IGNORE INTO discovery_node_evidence(run_id,evidence_key,observed_from,provider,provider_node_id,advertised_name,addresses_json,online,metadata_json,observed_at,topology_identity) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                (run_id, key, node.get("observed_from", controller_id), None, None,
+                                 None, "[]", None, json.dumps({"aliases": node.get("aliases", []),
+                                 "provider_peers": node.get("provider_peers", [])}, sort_keys=True),
+                                 node.get("observed_at"), None))
+            for peer in provider_peers:
+                key = f"{peer.get('provider')}:{peer.get('provider_node_id')}" if peer.get("provider_node_id") else f"{run_id}:peer:{peer.get('advertised_name')}"
+                self.db.execute("INSERT OR IGNORE INTO discovery_node_evidence(run_id,evidence_key,observed_from,provider,provider_node_id,advertised_name,addresses_json,online,metadata_json,observed_at,topology_identity) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                (run_id, key, controller_id, peer.get("provider"), peer.get("provider_node_id"),
+                                 peer.get("advertised_name"), json.dumps(peer.get("addresses", [])),
+                                 None if peer.get("online") is None else str(bool(peer.get("online"))),
+                                 json.dumps(peer.get("metadata", {}), sort_keys=True), peer.get("observed_at"), None))
+            for relationship in graph.get("relationships", []):
+                self.db.execute("INSERT OR IGNORE INTO discovery_relationship_evidence(run_id,source,destination,alias,effective_json,auth_state,provenance,observed_from,evidence,observed_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                                (run_id, relationship["source"], relationship["destination"], relationship["alias"],
+                                 json.dumps(relationship.get("effective", {}), sort_keys=True), relationship["auth_state"],
+                                 relationship["provenance"], relationship["observed_from"], relationship.get("evidence"),
+                                 completed_at))
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def latest_discovery_run(self):
+        try:
+            row = self.db.execute("SELECT * FROM discovery_runs ORDER BY completed_at DESC LIMIT 1").fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return dict(row) if row else None
+
+    def discovery_history(self):
+        try:
+            return [dict(row) for row in self.db.execute(
+                "SELECT * FROM discovery_runs ORDER BY completed_at ASC")]
+        except sqlite3.OperationalError:
+            return []
+
+    def discovery_graph(self, run_id=None):
+        import json
+        try:
+            if run_id is None:
+                row = self.db.execute("SELECT run_id FROM discovery_runs ORDER BY completed_at DESC LIMIT 1").fetchone()
+                run_id = row[0] if row else None
+            if run_id is None:
+                return {"run_id": None, "nodes": [], "relationships": []}
+            nodes = [dict(row) for row in self.db.execute("SELECT * FROM discovery_node_evidence WHERE run_id=? ORDER BY id", (run_id,))]
+            relationships = [dict(row) for row in self.db.execute("SELECT * FROM discovery_relationship_evidence WHERE run_id=? ORDER BY id", (run_id,))]
+            for row in nodes:
+                row["addresses"] = json.loads(row.pop("addresses_json"))
+                row["metadata"] = json.loads(row.pop("metadata_json"))
+            for row in relationships:
+                row["effective"] = json.loads(row.pop("effective_json"))
+            return {"run_id": run_id, "nodes": nodes, "relationships": relationships}
+        except sqlite3.OperationalError:
+            return {"run_id": None, "nodes": [], "relationships": []}
+
+    def discovery_evidence(self):
+        """Return all retained discovery evidence without collapsing history."""
+        import json
+        try:
+            nodes = [dict(row) for row in self.db.execute("SELECT * FROM discovery_node_evidence ORDER BY id")]
+            relationships = [dict(row) for row in self.db.execute("SELECT * FROM discovery_relationship_evidence ORDER BY id")]
+            for row in nodes:
+                row["addresses"] = json.loads(row.pop("addresses_json"))
+                row["metadata"] = json.loads(row.pop("metadata_json"))
+            for row in relationships:
+                row["effective"] = json.loads(row.pop("effective_json"))
+            return {"nodes": nodes, "relationships": relationships}
+        except sqlite3.OperationalError:
+            return {"nodes": [], "relationships": []}
     def latest(self):
         row=self.db.execute("SELECT * FROM reconciliations ORDER BY id DESC LIMIT 1").fetchone(); return dict(row) if row else None

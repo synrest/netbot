@@ -5,12 +5,14 @@ from __future__ import annotations
 import fcntl
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .provider import TailscaleProvider
 from .seed import discover_local_ssh
 from .crawl import RemoteSSHSeedObserver, crawl
+from .crawl import NodeObservation
 from ..state import State
 
 
@@ -36,11 +38,17 @@ def run_cycle(config_path: Path, db_path: Path, *, home: Path | None = None,
         state = State(db_path)
         controller_id = state.controller_identity()
         state.close()
+        started_at = datetime.now(timezone.utc).isoformat()
         provider = provider or TailscaleProvider()
         peers, provider_error = provider.observe()
         ssh = discover_local_ssh(home, peers, runner=runner or subprocess.run)
         graph = crawl(controller_id, ssh, RemoteSSHSeedObserver(runner=runner or subprocess.run))
-        status = "PARTIAL" if provider_error else "OK"
+        for peer in peers:
+            key = f"{peer.provider}:{peer.provider_node_id}" if peer.provider_node_id else f"peer:{peer.advertised_name}"
+            graph.add_node(NodeObservation(key, controller_id, (), (peer.as_dict(),)))
+        crawl_status = "BUDGET_EXHAUSTED" if graph.truncated else (
+            "PARTIAL" if any(source.get("status") != "OBSERVED" for source in graph.sources) else "COMPLETE")
+        status = "PARTIAL" if provider_error or crawl_status != "COMPLETE" else "OK"
         local_peer = next((peer.as_dict() for peer in peers
                            if peer.metadata.get("_netbot_self")), None)
         result = {"cycle_id": cycle_id, "controller_id": controller_id, "dry_run": dry_run,
@@ -50,11 +58,18 @@ def run_cycle(config_path: Path, db_path: Path, *, home: Path | None = None,
                                "peers": [peer.as_dict() for peer in peers]},
                   "ssh": ssh, "crawl": graph.as_dict()}
         if not dry_run:
-            state = State(db_path)
-            rows = [{"identity": peer.advertised_name, "provider": peer.provider,
-                     "provider_node_id": peer.provider_node_id, "addresses": peer.addresses,
-                     "online": peer.online, "status": "present"} for peer in peers]
-            if rows:
-                state.observations(cycle_id, rows)
-            state.close()
+            try:
+                state = State(db_path)
+                state.record_discovery_cycle(
+                    cycle_id, controller_id, started_at, datetime.now(timezone.utc).isoformat(),
+                    status, "FAILED" if provider_error else "OK", crawl_status,
+                    graph.reason, graph.as_dict(), [peer.as_dict() for peer in peers])
+                state.close()
+            except Exception as exc:
+                try:
+                    state.close()
+                except Exception:
+                    pass
+                result["status"] = "PERSISTENCE_FAILED"
+                result["persistence_error"] = str(exc)
         return result

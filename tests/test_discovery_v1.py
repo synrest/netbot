@@ -4,9 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from netbot.discovery.cycle import run_cycle
 from netbot.discovery.crawl import RemoteSourceObservation, crawl
+from netbot.state import State
 from netbot.discovery.provider import DiscoveredPeer
 from netbot.discovery.seed import (AUTH_PASSWORD, AUTH_PUBLIC_KEY, AUTH_UNKNOWN,
                                    AUTH_UNAVAILABLE, discover_local_ssh)
@@ -177,6 +179,79 @@ Host human
                                    "good": RemoteSourceObservation("good", (), status="OBSERVED")}))
         self.assertEqual(len(graph.sources), 2)
         self.assertEqual(graph.sources[0]["status"], "SOURCE_INSPECTION_FAILED")
+
+    def persisted_graph(self, run_id, auth_state="PUBLIC_KEY_PROVEN", source="a"):
+        return {"nodes": [{"observation_identity": "tailscale:node-1", "observed_from": source,
+                           "aliases": ["b"], "provider_peers": [], "status": "OBSERVED"}],
+                "relationships": [{"source": source, "destination": "node-1", "alias": "b",
+                                    "effective": {"hostname": "b", "user": "zero", "port": 22},
+                                    "auth_state": auth_state, "provenance": "SSH_CONFIG_HUMAN",
+                                    "observed_from": source, "evidence": "fixture"}],
+                "sources": [], "truncated": False, "reason": None}
+
+    def test_non_dry_cycle_persists_run_and_directed_evidence(self):
+        root = self.home(); config = root / "topology.yaml"; config.write_text("version: 1\nhosts:\n")
+        db = root / "history.sqlite3"
+        provider = SimpleNamespace(name="tailscale", observe=lambda: ([DiscoveredPeer(
+            "tailscale", "node-1", "machine20", ["100.0.0.20"], True)], None))
+        result = run_cycle(config, db, home=root, provider=provider, runner=FakeRunner())
+        self.assertEqual(result["status"], "OK")
+        state = State(db)
+        run = state.latest_discovery_run(); graph = state.discovery_graph()
+        state.close()
+        self.assertEqual(run["run_id"], result["cycle_id"])
+        self.assertEqual(run["crawl_status"], "COMPLETE")
+        self.assertTrue(graph["nodes"])
+
+    def test_dry_run_does_not_persist_discovery_history(self):
+        root = self.home(); config = root / "topology.yaml"; config.write_text("version: 1\nhosts:\n")
+        db = root / "history.sqlite3"
+        provider = SimpleNamespace(name="tailscale", observe=lambda: ([], None))
+        run_cycle(config, db, home=root, dry_run=True, provider=provider, runner=FakeRunner())
+        state = State(db); self.assertIsNone(state.latest_discovery_run()); state.close()
+
+    def test_history_preserves_provenance_and_auth_transitions(self):
+        root = Path(tempfile.mkdtemp()); db = root / "history.sqlite3"
+        state = State(db)
+        state.record_discovery_cycle("r1", "controller", "t1", "t1", "OK", "OK", "COMPLETE", None,
+                                     self.persisted_graph("r1", "PUBLIC_KEY_PROVEN", "a"), [])
+        state.record_discovery_cycle("r2", "controller", "t2", "t2", "PARTIAL", "FAILED", "PARTIAL", None,
+                                     self.persisted_graph("r2", "UNAVAILABLE", "b"), [])
+        graph = state.discovery_graph(); rows = state.db.execute(
+            "select auth_state,provenance,observed_from from discovery_relationship_evidence order by id").fetchall()
+        state.close()
+        self.assertEqual([row[0] for row in rows], ["PUBLIC_KEY_PROVEN", "UNAVAILABLE"])
+        self.assertEqual([row[2] for row in rows], ["a", "b"])
+        self.assertEqual(len(graph["relationships"]), 1)
+
+    def test_different_provider_ids_do_not_merge_by_name_or_ip(self):
+        root = Path(tempfile.mkdtemp()); db = root / "history.sqlite3"; state = State(db)
+        for run, node in (("r1", "one"), ("r2", "two")):
+            state.record_discovery_cycle(run, "controller", run, run, "OK", "OK", "COMPLETE", None,
+                {"nodes": [], "relationships": [], "sources": [], "truncated": False, "reason": None},
+                [{"provider": "tailscale", "provider_node_id": node, "advertised_name": "same",
+                  "addresses": ["100.0.0.1"], "online": True, "metadata": {}, "observed_at": run}])
+        count = state.db.execute("select count(distinct evidence_key) from discovery_node_evidence").fetchone()[0]
+        state.close(); self.assertEqual(count, 2)
+
+    def test_provider_failure_retains_prior_evidence(self):
+        root = Path(tempfile.mkdtemp()); db = root / "history.sqlite3"; state = State(db)
+        state.record_discovery_cycle("r1", "controller", "t1", "t1", "OK", "OK", "COMPLETE", None,
+                                     self.persisted_graph("r1"), [])
+        state.record_discovery_cycle("r2", "controller", "t2", "t2", "PARTIAL", "FAILED", "COMPLETE", None,
+                                     {"nodes": [], "relationships": [], "sources": [], "truncated": False, "reason": None}, [])
+        self.assertIsNotNone(state.latest_discovery_run())
+        self.assertEqual(state.db.execute("select count(*) from discovery_relationship_evidence").fetchone()[0], 1)
+        state.close()
+
+    def test_persistence_failure_is_explicit(self):
+        root = self.home(); config = root / "topology.yaml"; config.write_text("version: 1\nhosts:\n")
+        provider = SimpleNamespace(name="tailscale", observe=lambda: ([], None))
+        with patch("netbot.discovery.cycle.State.record_discovery_cycle", side_effect=RuntimeError("disk failure")):
+            result = run_cycle(config, root / "history.sqlite3", home=root,
+                               provider=provider, runner=FakeRunner())
+        self.assertEqual(result["status"], "PERSISTENCE_FAILED")
+        self.assertIn("disk failure", result["persistence_error"])
 
 
 if __name__ == "__main__":
