@@ -1,6 +1,8 @@
 import json, subprocess
 from ..models import TailscaleNode
 
+TAILSCALED_SOCKET = "/var/run/tailscaled.socket"
+
 def _first(d, *keys):
     for k in keys:
         if d.get(k) is not None: return d[k]
@@ -33,7 +35,8 @@ def short_dns_name(name):
 
 def discover() -> tuple[list[TailscaleNode], str | None]:
     try:
-        result = subprocess.run(["tailscale", "status", "--json"], text=True, capture_output=True, check=True)
+        result = subprocess.run(["tailscale", f"--socket={TAILSCALED_SOCKET}", "status", "--json"],
+                                text=True, capture_output=True, check=True)
         return normalize_status(json.loads(result.stdout)), None
     except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         detail = (getattr(exc, "stderr", "") or str(exc)).strip()
