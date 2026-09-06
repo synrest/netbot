@@ -1,69 +1,184 @@
 # Netbot
 
-Netbot is a small, deterministic, read-only topology reconciler. Desired topology lives in `config/topology.yaml`; SQLite stores observations and reconciliation history as a rebuildable cache.
+**Know your network. Keep it consistent.**
 
-Netbot normally runs on one active controller, currently Arasaka. Managed nodes such as Kiroshi, Orion, and Oracle do not require Netbot; the controller manages them agentlessly through existing infrastructure such as OpenSSH and Tailscale. Additional Netbot installations are optional controller/peer instances for migration, recovery, or testing, not managed-node agents. Netbot is never required for ordinary manual SSH access.
+Netbot is an agentless topology discovery and SSH reconciliation tool for
+private networks.
 
-## Usage
+It discovers machines and relationships from Tailscale and OpenSSH evidence,
+builds a persistent view of the network, detects meaningful changes, and keeps
+Netbot-managed SSH configuration consistent across authorized hosts.
+
+**No agents on managed machines. No cloud service. No AI required.**
+
+## Why Netbot?
+
+Private networks accumulate machines, VMs, changing addresses, Tailscale
+identities, SSH aliases, stale configuration, and relationships that exist only
+in someone's memory.
+
+Netbot turns that administrative evidence into a durable topology. It can show
+what it sees, what changed, what is unreachable, what has not been accepted,
+and what SSH state would need reconciliation.
+
+Netbot is deliberately conservative: discovering something does not give it
+permission to manage that thing.
+
+## What it does
+
+- Discovers nodes from Tailscale and existing SSH configuration.
+- Follows existing public-key SSH relationships to inspect reachable peers
+  without installing agents.
+- Builds durable topology evidence and observation history.
+- Distinguishes observed infrastructure from explicitly accepted topology.
+- Detects new, missing, unavailable, and conflicting nodes.
+- Proposes topology changes without silently accepting them.
+- Reconciles Netbot-owned SSH configuration across authorized hosts.
+- Preserves human-owned SSH configuration.
+- Records meaningful events and recovery transitions.
+- Runs manually or periodically from a single controller.
+
+The important distinction is:
+
+    OBSERVED != ACCEPTED
+    CAN ACCESS != CAN MANAGE
+
+## Install
+
+### npm
 
 ```sh
-python3 -m netbot.cli topology
-python3 -m netbot.cli discover
-python3 -m netbot.cli diff
-python3 -m netbot.cli reconcile
-python3 -m netbot.cli sync
-python3 -m netbot.cli status
-python3 -m netbot.cli maintain
-python3 -m netbot.cli maintain --dry-run
-python3 -m netbot.cli scheduler install
-python3 -m netbot.cli scheduler status
-python3 -m netbot.cli scheduler remove
-python3 -m netbot.cli events
-python3 -m netbot.cli inspect orion
-python3 -m netbot.cli agent status orion
-python3 -m netbot.cli enroll
+npm install -g @synrest/netbot
 ```
 
-The default database is `state/netbot.sqlite3` and generated output is `generated/topology.json`. Override paths with `--config`, `--db`, and `--generated`.
+The npm package is a thin bootstrapper. Netbot itself is installed as a
+verified, versioned Python application while the command remains available
+through `~/.local/bin/netbot`.
 
-Distribution is provided through the thin npm bootstrap package (`@synrest/netbot`). Install with `npm install -g @synrest/netbot`; it installs a verified, versioned Python payload under the existing user-local Netbot root and keeps `~/.local/bin/netbot` stable across upgrades. Installing or upgrading the application does not enable scheduling or accept topology proposals; use `netbot scheduler install` explicitly.
+### GitHub Release
 
-Node/npm is optional. A published GitHub Release also provides a version-specific `netbot-<version>.zip` and direct `bootstrap.sh`; the bootstrap verifies the supplied SHA-256 and delegates to the existing user-level installer with `--no-service`. It never installs scheduling, runs Netbot, changes topology, or mutates Tailscale. The direct form is: `bootstrap.sh VERSION IMMUTABLE_ZIP_URL SHA256`.
+Versioned release archives are also published through
+[GitHub Releases](https://github.com/synrest/netbot/releases). They use the
+same verified runtime layout as the npm bootstrap. See
+[distribution details](docs/distribution.md) for the direct bootstrap command.
 
-`netbot maintain` is a bounded one-shot maintenance cycle. `netbot scheduler install` installs a user-level launchd agent on macOS or systemd user timer on Linux, running every 30 minutes by default (`--interval 30m`). Scheduling never accepts discovery proposals; topology changes still require explicit operator acceptance.
+Installing or upgrading Netbot does not automatically start periodic
+maintenance.
 
-`netbot sync` is the canonical reconciliation command; `--reason` accepts `manual`, `launch`, `calendar`, `ipn`, or `followup` for diagnostics only. Concurrent wake requests use a single-flight lock under `~/Library/Application Support/Netbot/run/`; one pending follow-up is coalesced after the active sync. The lock is an OS file lock and is released automatically if the process exits.
+## Start here
 
-Netbot v1 has a hard dependency on Tailscale. Tailscale supplies network identity, peer/topology observation, connectivity, and the primary event wake source. The canonical runtime is `Tailscale IPN -> netbot-watch -> netbot sync -> deterministic reconciliation`; `netbot sync` is the universal explicit entry point.
+Inspect Netbot's current view:
 
-`netbot-watch` is an optional local Tailscale IPN wake hint. It requests `netbot sync --reason ipn` after peer/netmap notifications, using a one-second debounce, and never treats those notifications as authoritative state. Tailscale is the only supported networking provider in v1. Alternative providers such as ZeroTier are future research only and must provide stable node identity, peer/topology observation, connectivity, and a useful local change mechanism.
+```sh
+netbot status
+```
 
-Service managers are deployment/process-lifetime adapters, not core Netbot architecture. Netbot remains runnable without launchd, systemd, or OpenRC through `netbot sync` and `netbot-watch`. The current macOS launchd integration is supported for login/reboot startup, watcher crash restart, and the optional `:00`/`:30` correctness fallback; periodic scheduling is not required for core correctness.
+See what a maintenance cycle would observe and reconcile without applying
+changes:
 
-Phase 7 launchd artifacts are provided as a macOS deployment adapter. Production installation installs only the watcher LaunchAgent using the safe supervision contract; the legacy `com.netbot.sync` `:00`/`:30` job is not installed by default. On Linux, installation detects a systemd user manager or OpenRC from live capabilities and uses the matching watcher adapter. Service managers are not part of the reconciliation core.
+```sh
+netbot maintain --dry-run
+```
 
-The retired local webhook spike measured approximately 15 MB RSS for a persistent receiver and approximately 32 MB for the Python-plus-Tailscale IPN wrapper. It confirmed that a public HTTP/Funnel path is unnecessary for local discovery; IPN is an optimization and calendar/manual sync remain the correctness paths.
+Inspect operator events:
 
-Phase 1 performs no remote SSH commands and no Tailscale writes. It reads the local SSH configuration and public-key metadata only.
+```sh
+netbot events
+```
 
-The supported Python baseline is 3.10+, including the platform's `venv`/`ensurepip` component required by the installer (often packaged separately as `python3-venv` on Debian). SSH access probes are explicit (`netbot access` or `netbot inspect HOST --probe`); routine status and reconciliation do not probe remote hosts.
+Run one maintenance cycle:
 
-Netbot 0.4.2 supports two deployment modes. For development, clone the repository and run `./install.sh --dev`. For production, unpack a versioned `netbot-X.Y.Z.zip` and run `./install.sh`; Git and the extracted source tree are not required afterward. The installer keeps a private per-user runtime under `~/Library/Application Support/Netbot/`, with stable wrappers in `~/.local/bin/`, so users do not need to activate a virtual environment or configure import paths.
+```sh
+netbot maintain
+```
 
-Production installation preserves `config/topology.yaml` and `state/netbot.sqlite3` outside versioned runtime directories. Reinstalling switches the private runtime without deleting desired topology or history. `./uninstall.sh` removes only Netbot runtime integration, wrappers, installed versions, transient runtime files, and logs; it retains configuration and state, the user's SSH configuration/keys, Tailscale, and remote hosts.
+Enable periodic maintenance explicitly:
 
-Use `netbot --version`, `netbot doctor`, and `netbot service status` to verify an installation. The v1 external requirements are Python >= 3.10, the Tailscale CLI, and the OpenSSH client; macOS service integration additionally requires launchd/launchctl. Netbot does not install Tailscale automatically.
+```sh
+netbot scheduler install
+netbot scheduler status
+```
 
-`agent-temporary` remains a separate project and lifecycle. Netbot does not require it for OBSERVE or MANAGE. It is optional target-side infrastructure for bounded MAINTAIN authority after explicit human activation; Netbot may observe and lower that authority but never raises it or activates it.
+The default scheduled interval is 30 minutes.
 
-Release archives are built with `./scripts/build-release.sh` and produce `dist/netbot-X.Y.Z.zip` plus a SHA-256 sidecar. Archives exclude Git metadata, caches, local databases, generated output, logs, virtual environments, and private credentials. `agent-temporary` is never bundled.
+## How it works
 
-On Linux, a systemd user manager installs `~/.config/systemd/user/netbot-watch.service` with `Restart=on-failure` and `RestartSec=60s`; user-session startup is the default and `loginctl enable-linger` is never enabled automatically. OpenRC has no assumed unprivileged per-user service domain, so installation prepares a reviewed `supervise-daemon` script and reports the explicit administrator action required to place it in `/etc/init.d/`, enable it, and start it. OpenRC 0.63's default respawn-delay cap is 30 seconds, so that adapter uses a bounded 30-second retry delay. The core install remains unprivileged.
+Netbot normally runs on one controller:
 
-`netbot agent status HOST` performs a read-only SSH observation of agent-temporary and effective `sudo -n -l`. It does not enable, disable, or execute privileged commands.
+```text
+                         Netbot
+                       controller
+                           |
+                   Tailscale + SSH
+                           |
+              +------------+------------+
+              |            |            |
+              v            v            v
+            host A       host B       host C
+            no agent     no agent     no agent
+```
 
-`netbot enroll` is informational only. It prints the canonical human-run Tailscale enrollment hints and performs no network, topology, or state operation. Bootstrap planning requires an explicit target Unix user; Netbot never infers that user from a hostname or topology identity.
+The controller observes network identity and SSH relationships, maintains
+accepted topology and evidence history, and projects authorized topology into
+Netbot-owned SSH configuration. Managed hosts remain ordinary machines using
+ordinary OpenSSH and Tailscale; they do not need a resident Netbot agent.
 
-Bootstrap access and topology identity are separate lifecycles. `MANAGED` means permanent OpenSSH access and host identity were verified; it does not adopt an unbound node into desired topology. Tailscale node IDs anchor observed bootstrap history but never create a topology binding by themselves.
+Netbot separates four questions:
 
-Explicit topology adoption is planned with `netbot adopt plan OBSERVED-NODE --as TOPOLOGY-ID` and applied with `netbot adopt apply OBSERVED-NODE --as TOPOLOGY-ID`. Apply reobserves the node and changes only topology intent; it does not reprovision SSH, Tailscale, privilege, or the machine itself.
+1. What has been observed?
+2. What identity does the evidence belong to?
+3. What topology has the operator accepted?
+4. What state is Netbot authorized to manage?
+
+This prevents visibility or SSH reachability from silently becoming management
+authority.
+
+## Safety model
+
+- Observation does not imply acceptance.
+- Knowing about a host does not imply SSH access.
+- SSH access does not imply management authority.
+- Discovery never silently changes accepted topology.
+- Netbot never stores, requests, or guesses passwords.
+- Netbot does not overwrite human-owned SSH configuration.
+- Netbot does not mutate Tailscale configuration.
+- Installation does not silently enable scheduled maintenance.
+- Dry-run operations do not persist operational mutations.
+
+Netbot owns only the state explicitly assigned to it.
+
+## Scheduling
+
+`netbot maintain` is a bounded one-shot command. Scheduling is an explicit
+operator decision:
+
+```sh
+netbot scheduler install
+```
+
+The default interval is 30 minutes. macOS uses a user LaunchAgent; supported
+Linux installations use the appropriate user-level scheduling integration.
+Application upgrades keep the stable launcher, so the scheduler does not need
+to be recreated for every release. See [scheduling details](docs/scheduling.md).
+
+## Requirements
+
+- macOS or Linux
+- Python 3.10+
+- OpenSSH client
+- Tailscale
+
+Node.js/npm is required only for the npm installation path. Netbot does not
+install or configure Tailscale automatically.
+
+## Development
+
+For development from a repository checkout:
+
+```sh
+./install.sh --dev
+```
+
+Production installations do not require the Git checkout afterward. For
+implementation details, see [architecture](docs/architecture.md) and the
+supporting distribution and scheduling documentation.
