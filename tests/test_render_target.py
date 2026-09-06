@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from netbot.render_target import render_target
+from netbot.render_target import render_target, RenderInput, render_inputs
 
 
 TOPOLOGY = """version: 1
@@ -99,6 +99,13 @@ class RenderTargetTests(unittest.TestCase):
         result = render_target(path, "kiroshi")
         self.assertEqual(result.state, "RENDERABLE")
         self.assertEqual(len(result.inputs), 4)
+
+    def test_explicit_identity_file_is_rendered(self):
+        item = RenderInput("orion", "orion", "orion", "lourdes", 22,
+                           "RENDERABLE", "explicit", "~/.ssh/id_ed25519_arasaka")
+        self.assertEqual(render_inputs((item,)),
+                         "Host orion\n    HostName orion\n    User lourdes\n    Port 22\n"
+                         "    IdentityFile ~/.ssh/id_ed25519_arasaka\n")
 
     def test_missing_user_is_structured_and_no_partial_claim(self):
         directory, path = self.write(TOPOLOGY.replace("        user: rafael\n", "", 1))

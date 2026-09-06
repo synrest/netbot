@@ -20,6 +20,7 @@ class RenderInput:
     port: int | None
     state: str
     reason: str
+    identity_file: str | None = None
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
@@ -54,8 +55,15 @@ def _block(alias: str, hostname: str, user: str, port: int) -> str:
 def render_inputs(inputs: tuple[RenderInput, ...] | list[RenderInput]) -> str:
     """Render already-validated inputs in deterministic alias order."""
     by_alias = {item.alias: item for item in inputs}
-    return "".join(_block(alias, by_alias[alias].hostname, by_alias[alias].user, by_alias[alias].port)
-                   for alias in sorted(by_alias))
+    output = []
+    for alias in sorted(by_alias):
+        item = by_alias[alias]
+        output.append(_block(alias, item.hostname, item.user, item.port))
+        if item.identity_file:
+            output[-1] = output[-1].replace(
+                f"    Port {item.port}\n",
+                f"    Port {item.port}\n    IdentityFile {item.identity_file}\n")
+    return "".join(output)
 
 
 def render_target(config_path, target_identity: str) -> TargetRender:
@@ -110,7 +118,8 @@ def render_target(config_path, target_identity: str) -> TargetRender:
                 inputs.append(item); errors.append(item); continue
             aliases[alias] = decision.destination_identity
             inputs.append(RenderInput(decision.destination_identity, alias, route.hostname, user,
-                                      route.port, "RENDERABLE", "complete desired render inputs"))
+                                      route.port, "RENDERABLE", "complete desired render inputs",
+                                      ssh.get("identity_file") or ssh.get("identityfile")))
 
     if errors:
         return TargetRender(target_identity, "INCOMPLETE", inputs=tuple(inputs),

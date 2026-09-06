@@ -165,6 +165,23 @@ def _managed_content(controller_id, content):
     return f"{MANAGED_MARKER}\n{CONTROLLER_MARKER}{controller_id}\n" + content
 
 
+def _managed_identity_files(content: str | None) -> dict[str, str]:
+    """Read only explicit per-alias IdentityFile metadata from the fragment."""
+    result: dict[str, str] = {}
+    alias = None
+    for raw in (content or "").splitlines():
+        line = raw.strip()
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        key, value = parts[0].lower(), parts[1].strip()
+        if key == "host" and "*" not in value and "?" not in value:
+            alias = value
+        elif key == "identityfile" and alias and value:
+            result[alias] = value
+    return result
+
+
 def resolve_observation_transport(config_path, target_identity: str, db_path=None) -> dict[str, Any] | None:
     """Load only a positively verified ordinary-SSH bootstrap handoff."""
     if load_topology_authority(config_path) == target_identity:
@@ -230,6 +247,11 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
         return TargetApplyPlan(target_identity, "TARGET_UNAVAILABLE", "BLOCKED", reason=view.reason,
                                transport_alias=transport, transport_spec=bootstrap_transport)
 
+    read_state, current, reason = _read_managed(runner, transport, bootstrap_transport)
+    if read_state == "REMOTE_READ_ERROR":
+        return TargetApplyPlan(target_identity, "REMOTE_READ_ERROR", "BLOCKED", reason=reason,
+                               transport_alias=transport, transport_spec=bootstrap_transport)
+    preserved_identity_files = _managed_identity_files(current)
     rendered = render_target(config_path, target_identity)
     if rendered.state != "RENDERABLE":
         return TargetApplyPlan(target_identity, "RENDER_ERROR", "BLOCKED", reason=rendered.reason,
@@ -267,12 +289,9 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
     managed = tuple(sorted(item.identity for item in view.relationships
                            if item.state in {"MISSING", "VALID_MANAGED"} and item.provenance in {"ABSENT", "MANAGED"}))
     managed_aliases = {item.alias for item in rendered.inputs if item.identity in managed and item.state == "RENDERABLE"}
-    desired = render_inputs(tuple(item for item in rendered.inputs if item.alias in managed_aliases))
-    read_state, current, reason = _read_managed(runner, transport, bootstrap_transport)
-    if read_state == "REMOTE_READ_ERROR":
-        return TargetApplyPlan(target_identity, "REMOTE_READ_ERROR", "BLOCKED", managed_peers=managed,
-                               human_peers=human, desired_content=desired, reason=reason,
-                               transport_alias=transport, transport_spec=bootstrap_transport)
+    desired_inputs = tuple(replace(item, identity_file=item.identity_file or preserved_identity_files.get(item.alias))
+                           for item in rendered.inputs if item.alias in managed_aliases)
+    desired = render_inputs(desired_inputs)
     target_node_id = next((host.attrs.get("bindings", {}).get("tailscale", {}).get("node_id")
                            for host in load_topology(config_path)[1] if host.identity == target_identity), None)
     ownership, record, controller_id = _ownership_state(config_path, target_identity, current, target_node_id, db_path=db_path)

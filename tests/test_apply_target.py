@@ -95,6 +95,19 @@ class ApplyTargetTests(unittest.TestCase):
                 again = build_apply_plan(path, "kiroshi", runner=remote)
             self.assertEqual(plan.desired_content, again.desired_content)
 
+    def test_managed_identity_file_is_preserved_in_desired_content(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.config(Path(d)); remote = RemoteFiles(
+                f"{MANAGED_MARKER}\n{CONTROLLER_MARKER}legacy\n"
+                "Host arasaka\n    HostName arasaka\n    User zero\n    Port 22\n"
+                "    IdentityFile ~/.ssh/id_ed25519_arasaka\n"
+                "Host orion\n    HostName orion\n    User lourdes\n    Port 22\n"
+                )
+            with patch("netbot.apply_target.build_ssh_view", return_value=view()), \
+                 patch("netbot.apply_target._ownership_state", return_value=("OWNED", {}, "legacy")):
+                plan = build_apply_plan(path, "kiroshi", runner=remote)
+            self.assertIn("IdentityFile ~/.ssh/id_ed25519_arasaka", plan.desired_content)
+
     def test_apply_plan_delegates_manual_proof_to_shared_view(self):
         with tempfile.TemporaryDirectory() as d:
             path = self.config(Path(d)); remote = RemoteFiles()
