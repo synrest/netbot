@@ -43,10 +43,24 @@ trap - EXIT HUP INT TERM
 '''
 
 
-def _auth_probe_command(alias: str) -> str:
-    return ("ssh -o BatchMode=yes -o PasswordAuthentication=no "
-            "-o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey "
-            "-o ConnectTimeout=5 -o ConnectionAttempts=1 " + shlex.quote(alias) + " true")
+def _config_probe_command(alias: str, hostname: str, user: str, port: int, identity_file: str) -> str:
+    """Verify rendered SSH semantics without contacting the destination."""
+    alias_q = shlex.quote(alias)
+    expected = {"hostname": hostname, "user": user, "port": str(port), "identityfile": identity_file}
+    checks = []
+    for key, value in expected.items():
+        value_q = shlex.quote(value)
+        if key == "identityfile":
+            # OpenSSH -G commonly expands ~/.ssh paths to $HOME absolute paths.
+            checks.append(f'''actual=$(printf '%s\\n' "$effective" | awk '$1=="identityfile" {{print $2; exit}}')
+case "$actual" in "$HOME"/*) actual="~/${{actual#"$HOME/"}}";; esac
+[ "$actual" = {value_q} ]''')
+        else:
+            checks.append(f'''actual=$(printf '%s\\n' "$effective" | awk '$1=="{key}" {{print $2; exit}}')
+[ "$actual" = {value_q} ]''')
+    return (f'''set -eu
+effective=$(/usr/bin/ssh -G {alias_q})
+''' + "\n".join(checks) + "\n")
 
 
 def _rollback_command(expected_hash: str, remove: bool) -> str:
@@ -87,11 +101,13 @@ class TargetApplyPlan:
     transport_alias: str | None = None
     transport_spec: dict[str, Any] | None = None
     auth_aliases: tuple[str, ...] = ()
+    config_expectations: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result.pop("transport_spec", None)
         result.pop("auth_aliases", None)
+        result.pop("config_expectations", None)
         return result | {"managed_path": MANAGED_PATH}
 
 
@@ -351,9 +367,13 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
                                reason="managed SSH file ownership is not proven for this controller",
                                transport_alias=transport, transport_spec=bootstrap_transport)
     auth_aliases = tuple(sorted(item.alias for item in desired_inputs if item.identity_file))
+    config_expectations = tuple({"alias": item.alias, "hostname": item.hostname,
+                                 "user": item.user, "port": item.port,
+                                 "identity_file": item.identity_file}
+                                for item in desired_inputs if item.identity_file)
     return TargetApplyPlan(target_identity, "READY", action, managed, human, (), desired, current,
                            transport_alias=transport, transport_spec=bootstrap_transport,
-                           auth_aliases=auth_aliases)
+                           auth_aliases=auth_aliases, config_expectations=config_expectations)
 
 
 def apply_target(plan: TargetApplyPlan, config_path=None, *, runner=subprocess.run) -> dict[str, Any]:
@@ -385,24 +405,27 @@ def apply_target(plan: TargetApplyPlan, config_path=None, *, runner=subprocess.r
                (plan.action != "REMOVE" and read_state == "OK" and current == plan.desired_content)
     if not verified:
         return {**result, "result": "WRITE_VERIFICATION_FAILED", "reason": reason or "managed file bytes differ"}
-    auth_failures = []
-    for alias in plan.auth_aliases:
-        probe = _remote(runner, transport, _auth_probe_command(alias), transport_spec=plan.transport_spec)
+    config_failures = []
+    for expected in plan.config_expectations:
+        alias = expected["alias"]
+        probe = _remote(runner, transport, _config_probe_command(
+            alias, expected["hostname"], expected["user"], expected["port"], expected["identity_file"]),
+                        transport_spec=plan.transport_spec)
         if isinstance(probe, tuple) or probe.returncode != 0:
-            auth_failures.append(alias)
-    if auth_failures:
+            config_failures.append(alias)
+    if config_failures:
         original = plan.current_managed_content
         rollback = _remote(runner, transport,
                            _rollback_command(hashlib.sha256(plan.desired_content.encode()).hexdigest(), original is None),
                            input_text=None if original is None else original,
                            transport_spec=plan.transport_spec)
         if isinstance(rollback, tuple) or rollback.returncode != 0:
-            return {**result, "result": "SSH_AUTH_VERIFICATION_FAILED",
-                    "auth_failures": auth_failures, "rollback": "FAILED",
-                    "reason": "managed SSH authentication probe failed and rollback was not verified"}
-        return {**result, "result": "SSH_AUTH_VERIFICATION_FAILED",
-                "auth_failures": auth_failures, "rollback": "SUCCEEDED",
-                "reason": "managed SSH authentication probe failed; previous managed bytes restored"}
+            return {**result, "result": "SSH_CONFIG_VERIFICATION_FAILED",
+                    "config_failures": config_failures, "rollback": "FAILED",
+                    "reason": "rendered SSH configuration verification failed and rollback was not verified"}
+        return {**result, "result": "SSH_CONFIG_VERIFICATION_FAILED",
+                "config_failures": config_failures, "rollback": "SUCCEEDED",
+                "reason": "rendered SSH configuration verification failed; previous managed bytes restored"}
     if plan.action != "REMOVE":
         from .state import State
         target_node_id = next((host.attrs.get("bindings", {}).get("tailscale", {}).get("node_id")

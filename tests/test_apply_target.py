@@ -73,7 +73,7 @@ class AuthRemote(RemoteFiles):
 
     def __call__(self, command, **kwargs):
         remote = command[-1]
-        if remote.startswith("ssh -o BatchMode=yes"):
+        if "effective=$(/usr/bin/ssh -G" in remote:
             self.probes.append(remote)
             return subprocess.CompletedProcess(command, 0 if self.auth_ok else 255, "", "Permission denied")
         if ".50-netbot-rollback." in remote:
@@ -132,13 +132,16 @@ class ApplyTargetTests(unittest.TestCase):
             desired = old + "    IdentityFile ~/.ssh/id_ed25519_arasaka\n"
             plan = TargetApplyPlan("kiroshi", "READY", "REPLACE", desired_content=desired,
                                    current_managed_content=old, transport_alias="kiroshi",
-                                   auth_aliases=("orion",))
+                                   auth_aliases=("orion",), config_expectations=({
+                                       "alias": "orion", "hostname": "orion", "user": "lourdes",
+                                       "port": 22, "identity_file": "~/.ssh/id_ed25519_arasaka"},))
             with patch("netbot.apply_target.build_ssh_view", return_value=view()):
                 result = apply_target(plan, path, runner=remote)
             self.assertEqual(result["result"], "WRITE_VERIFIED")
             self.assertEqual(len(remote.probes), 1)
-            self.assertIn("PasswordAuthentication=no", remote.probes[0])
-            self.assertIn("orion true", remote.probes[0])
+            self.assertIn("-G", remote.probes[0])
+            self.assertNotIn("BatchMode", remote.probes[0])
+            self.assertIn("ssh -G orion", remote.probes[0])
 
     def test_failed_rendered_alias_authentication_rolls_back(self):
         with tempfile.TemporaryDirectory() as d:
@@ -148,10 +151,12 @@ class ApplyTargetTests(unittest.TestCase):
             desired = old + "    IdentityFile ~/.ssh/id_ed25519_arasaka\n"
             plan = TargetApplyPlan("kiroshi", "READY", "REPLACE", desired_content=desired,
                                    current_managed_content=old, transport_alias="kiroshi",
-                                   auth_aliases=("orion",))
+                                   auth_aliases=("orion",), config_expectations=({
+                                       "alias": "orion", "hostname": "orion", "user": "lourdes",
+                                       "port": 22, "identity_file": "~/.ssh/id_ed25519_arasaka"},))
             with patch("netbot.apply_target.build_ssh_view", return_value=view()):
                 result = apply_target(plan, path, runner=remote)
-            self.assertEqual(result["result"], "SSH_AUTH_VERIFICATION_FAILED")
+            self.assertEqual(result["result"], "SSH_CONFIG_VERIFICATION_FAILED")
             self.assertEqual(result["rollback"], "SUCCEEDED")
             self.assertEqual(remote.current, old)
             self.assertNotEqual(remote.current, desired)
