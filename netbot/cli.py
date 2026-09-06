@@ -26,11 +26,12 @@ from .render_target import render_target
 from .apply_target import build_apply_plan, apply_target, resolve_observation_transport
 from .target_activation import build_activation_plan, activate_target
 from .controller_reconcile import reconcile_controller, reconcile_exit_code
+from .discovery.cycle import run_cycle
 from .managed_adoption import adoption_plan as managed_adoption_plan, apply_adoption as apply_managed_adoption
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","diff","reconcile","sync","inspect","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--target",dest="target_filter"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--expected-sha256"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--authorize-existing-config",action="store_true",help="authorize one safe Include insertion into an existing SSH config"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",choices=["version","doctor","status","topology","discover","diff","reconcile","cycle","sync","inspect","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--target",dest="target_filter"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--expected-sha256"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--authorize-existing-config",action="store_true",help="authorize one safe Include insertion into an existing SSH config"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.command == "enroll":
         if len(raw_argv) != 1:
             p.error("usage: netbot enroll")
@@ -41,6 +42,11 @@ def main(argv=None):
                                       dry_run=a.dry_run)
         print(json.dumps(result, indent=2, sort_keys=True))
         raise SystemExit(reconcile_exit_code(result))
+    if a.command == "cycle":
+        if a.host or a.target or a.candidate or a.target_filter:
+            p.error("usage: netbot cycle [--dry-run]")
+        print(json.dumps(run_cycle(a.config, a.db, dry_run=a.dry_run), indent=2, sort_keys=True))
+        return
     if a.command == "version":
         if a.host or a.target:
             p.error("usage: netbot version")
