@@ -90,8 +90,8 @@ hosts:
     class: unknown
     bindings:
       tailscale:
-        node_id: "1479759345960161"
-        name: netbot-test
+        node_id: "1962171247067809"
+        name: orthanc-db
       ssh:
         aliases:
           - netbot-test
