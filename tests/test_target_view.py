@@ -126,6 +126,47 @@ class TargetViewTests(unittest.TestCase):
             view = build_ssh_view(self.config(Path(d)), "kiroshi", [], runner=ManagedRunner("", ""))
             self.assertTrue(all(item.state == "VALID_MANAGED" for item in view.relationships))
 
+    def test_owned_managed_alias_route_rebind_remains_managed(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "topology.yaml"
+            path.write_text("""version: 1
+peer_policy:
+  default: topology
+hosts:
+  kiroshi:
+    bindings:
+      tailscale:
+        node_id: kiroshi-id
+        name: kiroshi
+      ssh:
+        aliases: [kiroshi]
+  netbot-test:
+    bindings:
+      tailscale:
+        node_id: test-id
+        name: orthanc-db
+      ssh:
+        aliases: [netbot-test]
+        user: zero
+""")
+
+            class ReboundRunner(Runner):
+                def __call__(self, command, **kwargs):
+                    self.commands.append(command)
+                    if "/usr/bin/ssh -G" in command[-1]:
+                        return subprocess.CompletedProcess(command, 0,
+                            "hostname netbot-test\nuser zero\nport 22\n", "")
+                    if "NETBOT_MANAGED_PROVENANCE=1" in command[-1]:
+                        return subprocess.CompletedProcess(command, 0,
+                            "EXACT 1\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "")
+                    return subprocess.CompletedProcess(command, 0,
+                        "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n", "")
+
+            view = build_ssh_view(path, "kiroshi", [], runner=ReboundRunner("", ""))
+            relationship = next(item for item in view.relationships if item.identity == "netbot-test")
+            self.assertEqual(relationship.state, "VALID_MANAGED")
+            self.assertEqual(relationship.provenance, "MANAGED")
+
     def test_loopback_route_is_not_portable_to_target(self):
         with tempfile.TemporaryDirectory() as d:
             extra = """  mikoshi:

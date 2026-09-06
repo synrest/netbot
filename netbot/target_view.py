@@ -108,10 +108,6 @@ def _relationship(identity, alias, observation: RemoteSSHObservation, bindings,
 
     if provenance == "ABSENT":
         if managed_provenance == "EXPLICIT":
-            if not route or effective.get("hostname") != route.get("hostname") or effective.get("port") != route.get("port"):
-                return SSHRelationship(identity, alias, "CONFLICT", "MANAGED", effective,
-                                       "managed alias conflicts with desired route",
-                                       desired_reason=desired_reason)
             if user and effective.get("user") != user:
                 return SSHRelationship(identity, alias, "CONFLICT", "MANAGED", effective,
                                        "managed alias user conflicts with topology binding",

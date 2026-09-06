@@ -111,6 +111,51 @@ class ApplyTargetTests(unittest.TestCase):
                 again = build_apply_plan(path, "kiroshi", runner=remote)
             self.assertEqual(plan.desired_content, again.desired_content)
 
+    def test_managed_route_rebind_plans_replace_not_conflict(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = root / "config" / "topology.yaml"
+            path.parent.mkdir()
+            path.write_text("""version: 1
+authority: arasaka
+peer_policy:
+  default: topology
+hosts:
+  kiroshi:
+    bindings:
+      tailscale:
+        node_id: kiroshi-id
+        name: kiroshi
+      ssh:
+        aliases: [kiroshi]
+  netbot-test:
+    bindings:
+      tailscale:
+        node_id: test-id
+        name: orthanc-db
+      ssh:
+        aliases: [netbot-test]
+        user: zero
+""")
+            current = (f"{MANAGED_MARKER}\n{CONTROLLER_MARKER}controller\n"
+                       "Host netbot-test\n    HostName netbot-test\n"
+                       "    User zero\n    Port 22\n")
+            state = State(root / "state" / "netbot.sqlite3")
+            state.save_managed_ssh_ownership("kiroshi", "controller", "~/.ssh/config.d/50-netbot.conf",
+                                             "kiroshi-id", hashlib.sha256(current.encode()).hexdigest(), "now")
+            state.close()
+            remote = RemoteFiles(current)
+            view = SSHView("kiroshi", "OK", [SSHRelationship(
+                "netbot-test", "netbot-test", "VALID_MANAGED", "MANAGED",
+                {"hostname": "netbot-test", "user": "zero", "port": 22},
+            )])
+            with patch("netbot.apply_target.build_ssh_view", return_value=view):
+                plan = build_apply_plan(path, "kiroshi", runner=remote)
+            self.assertEqual(plan.state, "READY")
+            self.assertEqual(plan.action, "REPLACE")
+            self.assertIn("HostName orthanc-db", plan.desired_content)
+            self.assertIn("HostName netbot-test", current)
+
     def test_managed_identity_file_is_preserved_in_desired_content(self):
         with tempfile.TemporaryDirectory() as d:
             path = self.config(Path(d)); remote = RemoteFiles(
