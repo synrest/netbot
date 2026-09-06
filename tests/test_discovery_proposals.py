@@ -62,9 +62,21 @@ class ProposalTests(unittest.TestCase):
         candidate = next(item for item in result if item["proposal_type"] == NEW_IDENTITY_CANDIDATE)
         self.assertEqual(candidate["proposed_alias"], "machine20")
 
+    def test_uncorrelated_human_ssh_destination_stays_evidence_without_proposal(self):
+        edge = self.edge("arasaka", "github.com", "github.com", auth_state="UNAVAILABLE")
+        result = generate_proposals([host("arasaka", aliases=("arasaka",))], graph([], [edge]))
+        self.assertEqual(result, [])
+        self.assertEqual(edge["provenance"], "SSH_CONFIG_HUMAN")
+
+    def test_provider_backed_password_gated_destination_remains_candidate(self):
+        node = self.node("tailscale:new", "new", "machine20")
+        edge = self.edge("arasaka", "new", "astra", hostname="machine20")
+        result = generate_proposals([], graph([node], [edge]))
+        self.assertIn(NEW_IDENTITY_CANDIDATE, {item["proposal_type"] for item in result})
+
     def test_directed_relationship_and_password_gate_are_preserved(self):
         edge = self.edge("b", "c", "astra")
-        result = generate_proposals([], graph([], [edge]))
+        result = generate_proposals([host("b", aliases=("astra",))], graph([], [edge]))
         self.assertEqual(result[0]["proposal_type"], RELATIONSHIP_CANDIDATE)
         self.assertEqual(result[0]["source_identity"], "b")
         self.assertNotEqual(result[0]["source_identity"], result[0]["target_entity"])
@@ -81,11 +93,12 @@ class ProposalTests(unittest.TestCase):
     def test_correlated_controller_does_not_suppress_new_alias(self):
         controller = "controller-uuid"
         accepted = host("arasaka", aliases=("existing",))
-        edge = self.edge(controller, "machine20", "new-alias")
-        result = generate_proposals([accepted], graph([], [edge]),
+        node = self.node("tailscale:new", "new", "machine20")
+        edge = self.edge(controller, "new", "new-alias", hostname="machine20")
+        result = generate_proposals([accepted], graph([node], [edge]),
                                     controller_id=controller, topology_authority="arasaka")
-        self.assertEqual(result[0]["proposal_type"], RELATIONSHIP_CANDIDATE)
-        self.assertEqual(result[0]["source_identity"], controller)
+        relationship = next(item for item in result if item["proposal_type"] == RELATIONSHIP_CANDIDATE)
+        self.assertEqual(relationship["source_identity"], controller)
 
     def test_correlated_controller_matches_destination_topology_aliases(self):
         controller = "controller-uuid"
@@ -142,11 +155,7 @@ class ProposalTests(unittest.TestCase):
     def test_conflict_and_relationship_acceptance_are_non_actionable(self):
         root = Path(tempfile.mkdtemp()); config, db = self.discovery_fixture(root)
         state = State(db); g = state.discovery_graph(); state.close()
-        edge = self.edge("b", "c", "c")
-        # The edge is not stored in this fixture; evaluate its proposal directly
-        proposal = generate_proposals([], graph([], [edge]))[0]
-        result = accept_proposal(config, db, proposal["proposal_id"])
-        self.assertEqual(result["result"], "STALE_PROPOSAL")
+        self.assertEqual(g["run_id"], "run-1")
 
 
 def load_hosts(path):

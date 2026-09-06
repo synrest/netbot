@@ -116,6 +116,17 @@ def _history_stats(all_nodes: list[dict[str, Any]], key: str):
     return (min(dates) if dates else None, max(dates) if dates else None, len(matches))
 
 
+def relationship_target_is_topology_candidate(edge: dict[str, Any], current_nodes: list[dict[str, Any]],
+                                               hosts: list[Any]) -> bool:
+    """Require provider evidence or an existing explicit topology alias."""
+    target = edge.get("destination")
+    for node in current_nodes:
+        if target in {node.get("evidence_key"), node.get("provider_node_id"),
+                      node.get("advertised_name"), *(node.get("addresses") or [])}:
+            return node.get("provider_node_id") is not None
+    return any(edge.get("alias") in _ssh_aliases(host) for host in hosts)
+
+
 def generate_proposals(hosts: list[Any], current_graph: dict[str, Any],
                        historical_evidence: dict[str, Any] | None = None, *,
                        controller_id: str | None = None,
@@ -213,6 +224,8 @@ def generate_proposals(hosts: list[Any], current_graph: dict[str, Any],
     for edge in current_edges:
         if edge.get("provenance") != "SSH_CONFIG_HUMAN":
             continue
+        if not relationship_target_is_topology_candidate(edge, current_nodes, hosts):
+            continue
         source = edge.get("source")
         correlated_source = resolve_observation_to_topology_identity(
             source, controller_id=controller_id, topology_authority=topology_authority)
@@ -221,7 +234,7 @@ def generate_proposals(hosts: list[Any], current_graph: dict[str, Any],
         # SSH projection on destination hosts.  Only suppress aliases from a
         # source proven to be the local topology authority; unresolved source
         # namespaces must continue producing proposals.
-        if correlated_source == topology_authority and any(alias == accepted_alias
+        if correlated_source is not None and correlated_source == topology_authority and any(alias == accepted_alias
                                                            for _, accepted_alias in accepted_aliases):
             continue
         target = edge.get("destination")
