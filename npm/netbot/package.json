@@ -1,6 +1,6 @@
 {
   "name": "@synrest/netbot",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Bootstrapper for the Python Netbot application",
   "bin": { "netbot": "bin/netbot.js" },
   "scripts": { "postinstall": "node lib/postinstall.js", "test": "node --test test/*.test.js" },

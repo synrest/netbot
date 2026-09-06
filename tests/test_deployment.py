@@ -18,7 +18,7 @@ ROOT = Path(__file__).parents[1]
 
 class DeploymentTests(unittest.TestCase):
     def test_version_is_consistent(self):
-        self.assertEqual(__version__, "0.3.0")
+        self.assertEqual(__version__, "0.4.0")
         self.assertIn(__version__, (ROOT / "pyproject.toml").read_text())
 
     def test_installed_plist_has_no_source_checkout_dependency(self):
