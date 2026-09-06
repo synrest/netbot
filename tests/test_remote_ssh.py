@@ -129,6 +129,18 @@ hosts:
             )
             self.assertEqual(result.stdout, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n")
 
+    def test_exact_managed_include_is_supported_without_human_ownership(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d); config_dir = home / ".ssh" / "config.d"
+            config_dir.mkdir(parents=True)
+            (home / ".ssh" / "config").write_text("Include ~/.ssh/config.d/50-netbot.conf\n")
+            (config_dir / "50-netbot.conf").write_text("Host kiroshi\n    User rafael\n")
+            result = subprocess.run(
+                ["/bin/sh", "-c", _provenance_command("kiroshi")],
+                env={"HOME": str(home)}, text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(result.stdout, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n")
+
     def test_empty_canonical_include_preserves_parent_human_provenance_in_zsh(self):
         with tempfile.TemporaryDirectory() as d:
             home = Path(d)

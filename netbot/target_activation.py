@@ -11,6 +11,7 @@ from typing import Any, Callable
 from .apply_target import MANAGED_PATH, _remote, resolve_observation_transport
 
 INCLUDE = "Include ~/.ssh/config.d/*"
+EXACT_INCLUDE = "Include ~/.ssh/config.d/50-netbot.conf"
 CONFIG_PATH = "~/.ssh/config"
 INSPECT_COMMAND = '''if [ -L "$HOME/.ssh" ] || [ -L "$HOME/.ssh/config" ]; then exit 43; fi
 if [ -e "$HOME/.ssh/config" ] && [ ! -f "$HOME/.ssh/config" ]; then exit 46; fi
@@ -145,7 +146,7 @@ def _include_state(content: str) -> str:
         if lowered.startswith("host "):
             before_match = False
         if lowered.startswith("include "):
-            if line == INCLUDE:
+            if line in {INCLUDE, EXACT_INCLUDE}:
                 exact.append(before_match)
             else:
                 return "INCLUDE_CONFLICT"

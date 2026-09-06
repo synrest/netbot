@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from netbot.target_activation import (CREATE_COMMAND, INCLUDE, TargetActivationPlan,
+from netbot.target_activation import (CREATE_COMMAND, EXACT_INCLUDE, INCLUDE, TargetActivationPlan,
                                       build_activation_plan, activate_target)
 
 
@@ -70,6 +70,12 @@ class TargetActivationTests(unittest.TestCase):
             plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test", runner=ActivationRunner(output))
         self.assertEqual((plan.state, plan.action), ("ACTIVE", "NO_CHANGE"))
 
+    def test_existing_exact_managed_include_is_no_change(self):
+        output = "NETBOT_CONFIG_PRESENT\nInclude ~/.ssh/config.d/50-netbot.conf\nNETBOT_CONFIG_D_PRESENT\n50-netbot.conf\n"
+        with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test", runner=ActivationRunner(output))
+        self.assertEqual((plan.state, plan.action), ("ACTIVE", "NO_CHANGE"))
+
     def test_existing_config_without_include_blocks(self):
         output = "NETBOT_CONFIG_PRESENT\nHost human\n    User zero\nNETBOT_CONFIG_D_ABSENT\n"
         with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
@@ -114,6 +120,12 @@ class TargetActivationTests(unittest.TestCase):
 
     def test_include_after_host_is_conflict(self):
         output = "NETBOT_CONFIG_PRESENT\nHost human\nInclude ~/.ssh/config.d/*\nNETBOT_CONFIG_D_PRESENT\n"
+        with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
+            plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test", runner=ActivationRunner(output))
+        self.assertEqual((plan.state, plan.action), ("INCLUDE_CONFLICT", "BLOCKED"))
+
+    def test_late_exact_managed_include_is_conflict(self):
+        output = "NETBOT_CONFIG_PRESENT\nHost human\nInclude ~/.ssh/config.d/50-netbot.conf\nNETBOT_CONFIG_D_PRESENT\n"
         with tempfile.TemporaryDirectory() as d, patch("netbot.target_activation.resolve_observation_transport", return_value=SPEC):
             plan = build_activation_plan(Path(d) / "topology.yaml", "netbot-test", runner=ActivationRunner(output))
         self.assertEqual((plan.state, plan.action), ("INCLUDE_CONFLICT", "BLOCKED"))

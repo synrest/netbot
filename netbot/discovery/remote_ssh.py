@@ -93,6 +93,7 @@ def _provenance_command(candidate: str) -> str:
         "case \"${included##*/}\" in 50-netbot.conf) continue;; esac; "
         "netbot_emit_file \"$included\" $((depth + 1)); "
         "done ;; "
+        "'Include ~/.ssh/config.d/50-netbot.conf') ;; "
         "Include\\ *) printf '%%s\\n' NETBOT_INCLUDE_ERROR ;; "
         "*) printf '%%s\\n' \"$raw\" ;; "
         "esac; done < \"$file\"; "
