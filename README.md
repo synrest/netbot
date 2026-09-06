@@ -13,12 +13,19 @@ python3 -m netbot.cli diff
 python3 -m netbot.cli reconcile
 python3 -m netbot.cli sync
 python3 -m netbot.cli status
+python3 -m netbot.cli maintain
+python3 -m netbot.cli maintain --dry-run
+python3 -m netbot.cli scheduler install
+python3 -m netbot.cli scheduler status
+python3 -m netbot.cli scheduler remove
 python3 -m netbot.cli inspect orion
 python3 -m netbot.cli agent status orion
 python3 -m netbot.cli enroll
 ```
 
 The default database is `state/netbot.sqlite3` and generated output is `generated/topology.json`. Override paths with `--config`, `--db`, and `--generated`.
+
+`netbot maintain` is a bounded one-shot maintenance cycle. `netbot scheduler install` installs a user-level launchd agent on macOS or systemd user timer on Linux, running every 30 minutes by default (`--interval 30m`). Scheduling never accepts discovery proposals; topology changes still require explicit operator acceptance.
 
 `netbot sync` is the canonical reconciliation command; `--reason` accepts `manual`, `launch`, `calendar`, `ipn`, or `followup` for diagnostics only. Concurrent wake requests use a single-flight lock under `~/Library/Application Support/Netbot/run/`; one pending follow-up is coalesced after the active sync. The lock is an OS file lock and is released automatically if the process exits.
 
