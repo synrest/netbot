@@ -110,6 +110,29 @@ def _human_names(relationships: list[dict[str, Any]], node: dict[str, Any]) -> t
     return sorted({x for x in aliases if x}), supporting
 
 
+def _accepted_state(binding: dict[str, Any], relationships: list[dict[str, Any]],
+                    node: dict[str, Any]) -> dict[str, Any]:
+    state = {"bindings": {"tailscale": binding}}
+    matches = []
+    names = {node.get("advertised_name"), *(node.get("addresses") or []), node.get("provider_node_id"), node.get("evidence_key")}
+    for edge in relationships:
+        if edge.get("provenance") != "SSH_CONFIG_HUMAN":
+            continue
+        effective = edge.get("effective") or {}
+        if edge.get("destination") in names or effective.get("hostname") in names:
+            matches.append(edge)
+    aliases = sorted({edge.get("alias") for edge in matches if edge.get("alias")})
+    if len(aliases) == 1:
+        ssh = {"aliases": aliases}
+        effective = matches[0].get("effective") or {}
+        if effective.get("user"):
+            ssh["user"] = effective["user"]
+        if effective.get("port"):
+            ssh["port"] = effective["port"]
+        state["bindings"]["ssh"] = ssh
+    return state
+
+
 def _history_stats(all_nodes: list[dict[str, Any]], key: str):
     matches = [row for row in all_nodes if row.get("evidence_key") == key]
     dates = [row.get("observed_at") for row in matches if row.get("observed_at")]
@@ -186,7 +209,8 @@ def generate_proposals(hosts: list[Any], current_graph: dict[str, Any],
         common = dict(candidate_identity=matched[0] if len(matched) == 1 else None,
                       source_identity=None, target_entity=key, proposed_alias=alias,
                       provider_binding=binding, current_accepted_state=matched or None,
-                      proposed_accepted_state=None, management_authority="not-granted-by-proposal",
+                      proposed_accepted_state=_accepted_state(binding, current_edges, node),
+                      management_authority="not-granted-by-proposal",
                       first_seen=first, last_seen=last, observation_count=count,
                       contradicting_evidence=(), missing_evidence=())
         if key in rebinds:

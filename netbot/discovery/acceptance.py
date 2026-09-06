@@ -25,12 +25,22 @@ def _candidate_text(original: bytes, proposal: dict) -> bytes:
     provider = binding.get("provider")
     if not identity or provider != "tailscale" or provider_id is None:
         raise ValueError("proposal has no supported canonical topology binding")
+    state = proposal.get("proposed_accepted_state") or {}
+    bindings = state.get("bindings", {})
+    ssh = bindings.get("ssh", {})
     block = (f"\n  {identity}:\n"
              "    class: unknown\n"
              "    bindings:\n"
              "      tailscale:\n"
              f"        node_id: \"{provider_id}\"\n"
              f"        name: {proposal.get('proposed_alias') or identity}\n")
+    if ssh.get("aliases"):
+        block += "      ssh:\n        aliases:\n"
+        block += "".join(f"          - {alias}\n" for alias in ssh["aliases"])
+        if ssh.get("user"):
+            block += f"        user: {ssh['user']}\n"
+        if ssh.get("port"):
+            block += f"        port: {ssh['port']}\n"
     return original + block.encode("utf-8")
 
 

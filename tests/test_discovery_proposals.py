@@ -10,6 +10,8 @@ from netbot.discovery.proposals import (
 )
 from netbot.discovery.acceptance import accept_proposal
 from netbot.state import State
+from netbot.controller_reconcile import _eligible
+from netbot.desired_route import desired_route
 
 
 def host(identity, node_id=None, aliases=()):
@@ -32,7 +34,8 @@ class ProposalTests(unittest.TestCase):
              auth_state="PASSWORD_GATED"):
         return {"source": source, "destination": destination, "alias": alias,
                 "provenance": provenance, "auth_state": auth_state,
-                "effective": {"hostname": hostname or destination}}
+                "effective": {"hostname": hostname or destination},
+                "observed_from": source}
 
     def test_exact_binding_is_already_accepted(self):
         result = generate_proposals([host("machine20", "node-1")], graph([self.node("tailscale:node-1", "node-1", "machine20")]))
@@ -148,6 +151,25 @@ class ProposalTests(unittest.TestCase):
         accepted = accept_proposal(config, db, proposal["proposal_id"])
         self.assertEqual(accepted["result"], "ACCEPTED")
         self.assertEqual(len(load_hosts(config)), 2)
+
+    def test_accepted_provider_candidate_preserves_correlated_ssh_binding_for_reconciler(self):
+        root = Path(tempfile.mkdtemp()); config = root / "topology.yaml"
+        config.write_text("version: 1\nhosts:\n  arasaka:\n    class: core\n")
+        db = root / "state.sqlite3"; state = State(db)
+        node = self.node("tailscale:new", "new", "machine20")
+        edge = self.edge("controller", "new", "machine20", hostname="machine20")
+        edge["effective"].update(user="zero", port=22)
+        state.record_discovery_cycle("run-1", "controller", "t1", "t1", "OK", "OK", "COMPLETE", None,
+                                     {"nodes": [], "relationships": [edge], "sources": []}, [node])
+        proposal = next(item for item in generate_proposals([], state.discovery_graph(), state.discovery_evidence())
+                        if item["proposal_type"] == NEW_IDENTITY_CANDIDATE)
+        state.close()
+        result = accept_proposal(config, db, proposal["proposal_id"])
+        self.assertEqual(result["result"], "ACCEPTED")
+        accepted = next(item for item in load_hosts(config) if item.identity == "machine20")
+        self.assertEqual(accepted.attrs["bindings"]["ssh"], {"aliases": ["machine20"], "user": "zero", "port": "22"})
+        self.assertTrue(_eligible(accepted))
+        self.assertEqual(desired_route("arasaka", "machine20", load_hosts(config)).state, "ROUTABLE")
         retry = accept_proposal(config, db, proposal["proposal_id"])
         self.assertIn(retry["result"], {"ALREADY_ACCEPTED", "STALE_PROPOSAL"})
         self.assertEqual(len(load_hosts(config)), 2)
