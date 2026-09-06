@@ -1,5 +1,8 @@
 # Netbot npm bootstrap
 
+The intended public package is `@synrest/netbot`; it installs the `netbot`
+command.
+
 This package is a thin bootstrapper; the Netbot application remains Python.
 The published package must provide immutable release metadata and a SHA-256
 verified `netbot-<version>.zip` payload (matching the repository release

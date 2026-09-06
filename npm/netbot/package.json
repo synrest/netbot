@@ -1,10 +1,9 @@
 {
-  "name": "netbot-cli-bootstrap",
+  "name": "@synrest/netbot",
   "version": "0.3.0",
   "description": "Bootstrapper for the Python Netbot application",
   "bin": { "netbot": "bin/netbot.js" },
   "scripts": { "postinstall": "node lib/postinstall.js", "test": "node --test test/*.test.js" },
   "engines": { "node": ">=18" },
-  "files": ["bin", "lib", "release.json"],
-  "private": true
+  "files": ["bin", "lib", "release.json"]
 }
