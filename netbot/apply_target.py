@@ -135,15 +135,24 @@ def _ownership_state(config_path, target_identity, current, target_node_id=None,
     lines = (current.splitlines() if current is not None else [])
     marker = next((line[len(CONTROLLER_MARKER):].strip() for line in lines if line.startswith(CONTROLLER_MARKER)), None)
     marked = MANAGED_MARKER in lines and marker
+    digest = hashlib.sha256(current.encode()).hexdigest()
+    current_node_id = str(target_node_id) if target_node_id is not None else None
+    record_matches = bool(record and controller_id and
+                          record.get("controller_id") == controller_id and
+                          record.get("managed_path") == MANAGED_PATH and
+                          record.get("target_identity") == target_identity and
+                          (str(record.get("target_node_id")) if record.get("target_node_id") is not None else None) == current_node_id)
     if not marked:
+        if record_matches and record.get("content_hash") == digest:
+            return "OWNED", record, controller_id
+        if record_matches:
+            return "DRIFTED", record, controller_id
         return "UNMARKED_EXISTING", record, controller_id
     if controller_id and marker != controller_id:
         return "FOREIGN_CONTROLLER", record, controller_id
     if not record:
         return "UNCLAIMED_MARKED", record, controller_id
-    digest = hashlib.sha256(current.encode()).hexdigest()
     recorded_node_id = record.get("target_node_id")
-    current_node_id = str(target_node_id) if target_node_id is not None else None
     if (record.get("controller_id") != marker or record.get("managed_path") != MANAGED_PATH or
             record.get("target_identity") != target_identity or recorded_node_id != current_node_id):
         return "OWNERSHIP_MISMATCH", record, controller_id
@@ -221,14 +230,23 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
         return TargetApplyPlan(target_identity, "TARGET_UNAVAILABLE", "BLOCKED", reason=view.reason,
                                transport_alias=transport, transport_spec=bootstrap_transport)
 
+    rendered = render_target(config_path, target_identity)
+    if rendered.state != "RENDERABLE":
+        return TargetApplyPlan(target_identity, "RENDER_ERROR", "BLOCKED", reason=rendered.reason,
+                               managed_peers=tuple(item.identity for item in view.relationships
+                                                   if item.state in {"MISSING", "VALID_MANAGED"}),
+                               transport_alias=transport, transport_spec=bootstrap_transport)
+    # An explicit human relationship may remain UNKNOWN/CONFLICT without
+    # making an unrelated managed alias unsafe: it is never copied into the
+    # managed fragment. Ambiguous managed/topology claims still block.
     conflicts = tuple(f"{item.identity}:{item.reason}" for item in view.relationships
-                      if item.state == "CONFLICT")
+                      if item.state == "CONFLICT" and item.provenance != "EXPLICIT")
     if conflicts:
         return TargetApplyPlan(target_identity, "CONFLICT", "BLOCKED", conflicts=conflicts,
                                reason="explicit human/topology SSH conflict blocks apply",
                                transport_alias=transport, transport_spec=bootstrap_transport)
     unknown = tuple(f"{item.identity}:{item.reason}" for item in view.relationships
-                    if item.state == "UNKNOWN")
+                    if item.state == "UNKNOWN" and item.provenance != "EXPLICIT")
     if unknown:
         return TargetApplyPlan(target_identity, "OWNERSHIP_UNKNOWN", "BLOCKED", conflicts=unknown,
                                reason="SSH ownership could not be proven safely",
@@ -245,12 +263,6 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
                                reason="expected peer has no safe desired route", transport_alias=transport,
                                transport_spec=bootstrap_transport)
 
-    rendered = render_target(config_path, target_identity)
-    if rendered.state != "RENDERABLE":
-        return TargetApplyPlan(target_identity, "RENDER_ERROR", "BLOCKED", reason=rendered.reason,
-                               managed_peers=tuple(item.identity for item in view.relationships
-                                                   if item.state in {"MISSING", "VALID_MANAGED"}),
-                               transport_alias=transport, transport_spec=bootstrap_transport)
     human = tuple(sorted(item.identity for item in view.relationships if item.state == "VALID_MANUAL"))
     managed = tuple(sorted(item.identity for item in view.relationships
                            if item.state in {"MISSING", "VALID_MANAGED"} and item.provenance in {"ABSENT", "MANAGED"}))

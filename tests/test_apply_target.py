@@ -10,6 +10,7 @@ from netbot.apply_target import (READ_COMMAND, REMOVE_COMMAND, WRITE_COMMAND,
                                  apply_target, build_apply_plan)
 from netbot.state import State
 from netbot.target_view import SSHRelationship, SSHView
+from netbot.render_target import RenderInput, TargetRender
 
 
 TOPOLOGY = """version: 1
@@ -167,6 +168,22 @@ class ApplyTargetTests(unittest.TestCase):
                 self.assertEqual(plan.action, "BLOCKED")
                 self.assertEqual(remote.writes, 0)
                 self.assertEqual(remote.current, "existing")
+
+    def test_unrelated_explicit_unknown_does_not_block_managed_candidate(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.config(Path(d)); remote = RemoteFiles()
+            mixed = SSHView("kiroshi", "OK", [
+                SSHRelationship("mikoshi", "mikoshi", "UNKNOWN", "EXPLICIT", {}),
+                SSHRelationship("kiroshi", "kiroshi", "MISSING", "ABSENT", {}),
+            ])
+            rendered = TargetRender("kiroshi", "RENDERABLE", inputs=(RenderInput(
+                "kiroshi", "kiroshi", "kiroshi", "rafael", 22, "RENDERABLE", "ok"),))
+            with patch("netbot.apply_target.build_ssh_view", return_value=mixed), \
+                 patch("netbot.apply_target.render_target", return_value=rendered):
+                plan = build_apply_plan(path, "kiroshi", runner=remote)
+            self.assertEqual(plan.action, "CREATE")
+            self.assertEqual(plan.managed_peers, ("kiroshi",))
+            self.assertNotIn("mikoshi", plan.desired_content)
 
     def test_replace_and_remove_only_managed_file(self):
         with tempfile.TemporaryDirectory() as d:
