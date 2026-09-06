@@ -67,6 +67,22 @@ class RemoteFiles:
         raise AssertionError(f"unexpected remote command: {remote}")
 
 
+class AuthRemote(RemoteFiles):
+    def __init__(self, current, auth_ok):
+        super().__init__(current); self.auth_ok = auth_ok; self.probes = []
+
+    def __call__(self, command, **kwargs):
+        remote = command[-1]
+        if remote.startswith("ssh -o BatchMode=yes"):
+            self.probes.append(remote)
+            return subprocess.CompletedProcess(command, 0 if self.auth_ok else 255, "", "Permission denied")
+        if ".50-netbot-rollback." in remote:
+            self.current = kwargs.get("input")
+            self.writes += 1
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return super().__call__(command, **kwargs)
+
+
 class ApplyTargetTests(unittest.TestCase):
     def config(self, root):
         path = root / "config" / "topology.yaml"
@@ -107,6 +123,38 @@ class ApplyTargetTests(unittest.TestCase):
                  patch("netbot.apply_target._ownership_state", return_value=("OWNED", {}, "legacy")):
                 plan = build_apply_plan(path, "kiroshi", runner=remote)
             self.assertIn("IdentityFile ~/.ssh/id_ed25519_arasaka", plan.desired_content)
+
+    def test_proven_identity_requires_rendered_alias_authentication(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.config(Path(d))
+            old = f"{MANAGED_MARKER}\n{CONTROLLER_MARKER}legacy\nHost orion\n"
+            remote = AuthRemote(old, auth_ok=True)
+            desired = old + "    IdentityFile ~/.ssh/id_ed25519_arasaka\n"
+            plan = TargetApplyPlan("kiroshi", "READY", "REPLACE", desired_content=desired,
+                                   current_managed_content=old, transport_alias="kiroshi",
+                                   auth_aliases=("orion",))
+            with patch("netbot.apply_target.build_ssh_view", return_value=view()):
+                result = apply_target(plan, path, runner=remote)
+            self.assertEqual(result["result"], "WRITE_VERIFIED")
+            self.assertEqual(len(remote.probes), 1)
+            self.assertIn("PasswordAuthentication=no", remote.probes[0])
+            self.assertIn("orion true", remote.probes[0])
+
+    def test_failed_rendered_alias_authentication_rolls_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self.config(Path(d))
+            old = f"{MANAGED_MARKER}\n{CONTROLLER_MARKER}legacy\nHost orion\n"
+            remote = AuthRemote(old, auth_ok=False)
+            desired = old + "    IdentityFile ~/.ssh/id_ed25519_arasaka\n"
+            plan = TargetApplyPlan("kiroshi", "READY", "REPLACE", desired_content=desired,
+                                   current_managed_content=old, transport_alias="kiroshi",
+                                   auth_aliases=("orion",))
+            with patch("netbot.apply_target.build_ssh_view", return_value=view()):
+                result = apply_target(plan, path, runner=remote)
+            self.assertEqual(result["result"], "SSH_AUTH_VERIFICATION_FAILED")
+            self.assertEqual(result["rollback"], "SUCCEEDED")
+            self.assertEqual(remote.current, old)
+            self.assertNotEqual(remote.current, desired)
 
     def test_apply_plan_delegates_manual_proof_to_shared_view(self):
         with tempfile.TemporaryDirectory() as d:

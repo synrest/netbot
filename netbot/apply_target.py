@@ -8,6 +8,7 @@ import tempfile
 import atexit
 import os
 import hashlib
+import shlex
 from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -42,6 +43,36 @@ trap - EXIT HUP INT TERM
 '''
 
 
+def _auth_probe_command(alias: str) -> str:
+    return ("ssh -o BatchMode=yes -o PasswordAuthentication=no "
+            "-o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey "
+            "-o ConnectTimeout=5 -o ConnectionAttempts=1 " + shlex.quote(alias) + " true")
+
+
+def _rollback_command(expected_hash: str, remove: bool) -> str:
+    expected = shlex.quote(expected_hash)
+    if remove:
+        return f'''set -eu
+if [ -L "$HOME/.ssh/config.d/50-netbot.conf" ] || [ ! -f "$HOME/.ssh/config.d/50-netbot.conf" ]; then exit 51; fi
+current_hash=$(shasum -a 256 "$HOME/.ssh/config.d/50-netbot.conf" | awk '{{print $1}}')
+[ "$current_hash" = {expected} ] || exit 50
+rm "$HOME/.ssh/config.d/50-netbot.conf"
+[ ! -e "$HOME/.ssh/config.d/50-netbot.conf" ]
+'''
+    return f'''set -eu
+if [ -L "$HOME/.ssh/config.d/50-netbot.conf" ] || [ ! -f "$HOME/.ssh/config.d/50-netbot.conf" ]; then exit 51; fi
+current_hash=$(shasum -a 256 "$HOME/.ssh/config.d/50-netbot.conf" | awk '{{print $1}}')
+[ "$current_hash" = {expected} ] || exit 50
+tmp=$(mktemp "$HOME/.ssh/config.d/.50-netbot-rollback.XXXXXXXX")
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+umask 077
+cat > "$tmp"
+chmod 600 "$tmp"
+mv "$tmp" "$HOME/.ssh/config.d/50-netbot.conf"
+trap - EXIT HUP INT TERM
+'''
+
+
 @dataclass(frozen=True)
 class TargetApplyPlan:
     target_identity: str
@@ -55,10 +86,12 @@ class TargetApplyPlan:
     reason: str | None = None
     transport_alias: str | None = None
     transport_spec: dict[str, Any] | None = None
+    auth_aliases: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result.pop("transport_spec", None)
+        result.pop("auth_aliases", None)
         return result | {"managed_path": MANAGED_PATH}
 
 
@@ -317,8 +350,10 @@ def build_apply_plan(config_path, target_identity: str, *, runner=subprocess.run
                                human_peers=human, current_managed_content=current,
                                reason="managed SSH file ownership is not proven for this controller",
                                transport_alias=transport, transport_spec=bootstrap_transport)
+    auth_aliases = tuple(sorted(item.alias for item in desired_inputs if item.identity_file))
     return TargetApplyPlan(target_identity, "READY", action, managed, human, (), desired, current,
-                           transport_alias=transport, transport_spec=bootstrap_transport)
+                           transport_alias=transport, transport_spec=bootstrap_transport,
+                           auth_aliases=auth_aliases)
 
 
 def apply_target(plan: TargetApplyPlan, config_path=None, *, runner=subprocess.run) -> dict[str, Any]:
@@ -350,6 +385,24 @@ def apply_target(plan: TargetApplyPlan, config_path=None, *, runner=subprocess.r
                (plan.action != "REMOVE" and read_state == "OK" and current == plan.desired_content)
     if not verified:
         return {**result, "result": "WRITE_VERIFICATION_FAILED", "reason": reason or "managed file bytes differ"}
+    auth_failures = []
+    for alias in plan.auth_aliases:
+        probe = _remote(runner, transport, _auth_probe_command(alias), transport_spec=plan.transport_spec)
+        if isinstance(probe, tuple) or probe.returncode != 0:
+            auth_failures.append(alias)
+    if auth_failures:
+        original = plan.current_managed_content
+        rollback = _remote(runner, transport,
+                           _rollback_command(hashlib.sha256(plan.desired_content.encode()).hexdigest(), original is None),
+                           input_text=None if original is None else original,
+                           transport_spec=plan.transport_spec)
+        if isinstance(rollback, tuple) or rollback.returncode != 0:
+            return {**result, "result": "SSH_AUTH_VERIFICATION_FAILED",
+                    "auth_failures": auth_failures, "rollback": "FAILED",
+                    "reason": "managed SSH authentication probe failed and rollback was not verified"}
+        return {**result, "result": "SSH_AUTH_VERIFICATION_FAILED",
+                "auth_failures": auth_failures, "rollback": "SUCCEEDED",
+                "reason": "managed SSH authentication probe failed; previous managed bytes restored"}
     if plan.action != "REMOVE":
         from .state import State
         target_node_id = next((host.attrs.get("bindings", {}).get("tailscale", {}).get("node_id")
