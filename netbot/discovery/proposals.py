@@ -48,7 +48,9 @@ def _id(payload: dict[str, Any]) -> str:
 def _proposal(**values) -> Proposal:
     identity = {key: values.get(key) for key in
                 ("proposal_type", "candidate_identity", "source_identity", "target_entity",
-                 "proposed_alias", "provider_binding")}
+                 "proposed_alias", "provider_binding", "supporting_evidence",
+                 "contradicting_evidence", "missing_evidence", "current_accepted_state",
+                 "proposed_accepted_state")}
     values["proposal_id"] = _id(identity)
     return Proposal(**values)
 

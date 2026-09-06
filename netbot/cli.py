@@ -28,6 +28,7 @@ from .target_activation import build_activation_plan, activate_target
 from .controller_reconcile import reconcile_controller, reconcile_exit_code
 from .discovery.cycle import run_cycle
 from .discovery.proposals import generate_proposals
+from .discovery.acceptance import accept_proposal
 from .managed_adoption import adoption_plan as managed_adoption_plan, apply_adoption as apply_managed_adoption
 
 def main(argv=None):
@@ -49,6 +50,11 @@ def main(argv=None):
         print(json.dumps(run_cycle(a.config, a.db, dry_run=a.dry_run), indent=2, sort_keys=True))
         return
     if a.command == "discovery":
+        if a.host == "accept":
+            if not a.target or a.candidate or a.proposal_type or a.proposal_node:
+                p.error("usage: netbot discovery accept PROPOSAL_ID [--dry-run]")
+            print(json.dumps(accept_proposal(a.config, a.db, a.target, dry_run=a.dry_run), indent=2, sort_keys=True))
+            return
         if a.host not in {"history", "graph", "evidence", "proposals"} or a.target or a.candidate:
             p.error("usage: netbot discovery {history|graph|evidence|proposals}")
         state = State(a.db)

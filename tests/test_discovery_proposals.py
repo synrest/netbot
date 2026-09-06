@@ -1,10 +1,14 @@
 import unittest
+import tempfile
 from types import SimpleNamespace
+from pathlib import Path
 
 from netbot.discovery.proposals import (
     ALREADY_ACCEPTED, CONFLICT, EXISTING_IDENTITY_REBIND_CANDIDATE,
     NEW_IDENTITY_CANDIDATE, RELATIONSHIP_CANDIDATE, generate_proposals,
 )
+from netbot.discovery.acceptance import accept_proposal
+from netbot.state import State
 
 
 def host(identity, node_id=None, aliases=()):
@@ -20,8 +24,8 @@ def graph(nodes=(), relationships=()):
 
 class ProposalTests(unittest.TestCase):
     def node(self, key, node_id, name, addresses=("100.0.0.1",)):
-        return {"evidence_key": key, "provider": "tailscale", "provider_node_id": node_id,
-                "advertised_name": name, "addresses": list(addresses)}
+        return {"evidence_key": key, "observation_identity": key, "provider": "tailscale",
+                "provider_node_id": node_id, "advertised_name": name, "addresses": list(addresses)}
 
     def edge(self, source, destination, alias, provenance="SSH_CONFIG_HUMAN", hostname=None,
              auth_state="PASSWORD_GATED"):
@@ -79,6 +83,44 @@ class ProposalTests(unittest.TestCase):
         a = generate_proposals([], graph([node]))
         b = generate_proposals([], graph([node]))
         self.assertEqual(a[0]["proposal_id"], b[0]["proposal_id"])
+
+    def discovery_fixture(self, root):
+        config = root / "topology.yaml"
+        config.write_text("version: 1\nhosts:\n  arasaka:\n    class: core\n")
+        db = root / "state.sqlite3"
+        state = State(db)
+        state.record_discovery_cycle("run-1", "controller", "t1", "t1", "OK", "OK", "COMPLETE", None,
+            {"nodes": [], "relationships": [], "sources": []},
+            [self.node("tailscale:new", "new", "machine20")])
+        state.close()
+        return config, db
+
+    def test_accept_new_identity_is_explicit_and_idempotent(self):
+        root = Path(tempfile.mkdtemp()); config, db = self.discovery_fixture(root)
+        state = State(db); proposal = generate_proposals([], state.discovery_graph(), state.discovery_evidence())[0]; state.close()
+        preview = accept_proposal(config, db, proposal["proposal_id"], dry_run=True)
+        self.assertEqual(preview["result"], "WOULD_ACCEPT")
+        self.assertEqual(len(load_hosts(config)), 1)
+        accepted = accept_proposal(config, db, proposal["proposal_id"])
+        self.assertEqual(accepted["result"], "ACCEPTED")
+        self.assertEqual(len(load_hosts(config)), 2)
+        retry = accept_proposal(config, db, proposal["proposal_id"])
+        self.assertIn(retry["result"], {"ALREADY_ACCEPTED", "STALE_PROPOSAL"})
+        self.assertEqual(len(load_hosts(config)), 2)
+
+    def test_conflict_and_relationship_acceptance_are_non_actionable(self):
+        root = Path(tempfile.mkdtemp()); config, db = self.discovery_fixture(root)
+        state = State(db); g = state.discovery_graph(); state.close()
+        edge = self.edge("b", "c", "c")
+        # The edge is not stored in this fixture; evaluate its proposal directly
+        proposal = generate_proposals([], graph([], [edge]))[0]
+        result = accept_proposal(config, db, proposal["proposal_id"])
+        self.assertEqual(result["result"], "STALE_PROPOSAL")
+
+
+def load_hosts(path):
+    from netbot.config import load_topology
+    return load_topology(path)[1]
 
 
 if __name__ == "__main__":

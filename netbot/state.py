@@ -276,5 +276,26 @@ class State:
             return {"nodes": nodes, "relationships": relationships}
         except sqlite3.OperationalError:
             return {"nodes": [], "relationships": []}
+    def record_discovery_acceptance(self, record):
+        self.db.execute("""CREATE TABLE IF NOT EXISTS discovery_acceptances(
+          acceptance_id INTEGER PRIMARY KEY, proposal_id TEXT NOT NULL, proposal_type TEXT NOT NULL,
+          timestamp TEXT NOT NULL, controller_id TEXT NOT NULL, topology_hash_before TEXT NOT NULL,
+          topology_hash_after TEXT NOT NULL, result TEXT NOT NULL, discovery_run_id TEXT)""")
+        try:
+            self.db.execute("ALTER TABLE discovery_acceptances ADD COLUMN discovery_run_id TEXT")
+        except sqlite3.OperationalError:
+            pass
+        from datetime import datetime, timezone
+        self.db.execute("INSERT INTO discovery_acceptances(proposal_id,proposal_type,timestamp,controller_id,topology_hash_before,topology_hash_after,result,discovery_run_id) VALUES (?,?,?,?,?,?,?,?)",
+                        (record["proposal_id"], record["proposal_type"], datetime.now(timezone.utc).isoformat(),
+                         record["controller_id"], record["topology_hash_before"], record["topology_hash_after"],
+                         record["result"], record.get("discovery_run_id")))
+        self.db.commit()
+    def discovery_acceptance(self, proposal_id):
+        try:
+            row = self.db.execute("SELECT * FROM discovery_acceptances WHERE proposal_id=? ORDER BY acceptance_id DESC LIMIT 1", (proposal_id,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return dict(row) if row else None
     def latest(self):
         row=self.db.execute("SELECT * FROM reconciliations ORDER BY id DESC LIMIT 1").fetchone(); return dict(row) if row else None
