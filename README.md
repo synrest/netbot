@@ -26,7 +26,9 @@ python3 -m netbot.cli enroll
 
 The default database is `state/netbot.sqlite3` and generated output is `generated/topology.json`. Override paths with `--config`, `--db`, and `--generated`.
 
-Distribution is provided through the thin npm bootstrap package (`@netbot/cli`, not yet published). It installs a verified, versioned Python payload under the existing user-local Netbot root and keeps `~/.local/bin/netbot` stable across upgrades. Installing or upgrading the application does not enable scheduling or accept topology proposals; use `netbot scheduler install` explicitly.
+Distribution is provided through the thin npm bootstrap package (`netbot-cli-bootstrap`, not yet published). It installs a verified, versioned Python payload under the existing user-local Netbot root and keeps `~/.local/bin/netbot` stable across upgrades. Installing or upgrading the application does not enable scheduling or accept topology proposals; use `netbot scheduler install` explicitly.
+
+Node/npm is optional. A published GitHub Release also provides a version-specific `netbot-<version>.zip` and direct `bootstrap.sh`; the bootstrap verifies the supplied SHA-256 and delegates to the existing user-level installer with `--no-service`. It never installs scheduling, runs Netbot, changes topology, or mutates Tailscale. The direct form is: `bootstrap.sh VERSION IMMUTABLE_ZIP_URL SHA256`.
 
 `netbot maintain` is a bounded one-shot maintenance cycle. `netbot scheduler install` installs a user-level launchd agent on macOS or systemd user timer on Linux, running every 30 minutes by default (`--interval 30m`). Scheduling never accepts discovery proposals; topology changes still require explicit operator acceptance.
 

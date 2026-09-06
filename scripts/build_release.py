@@ -8,7 +8,7 @@ root = pathlib.Path(sys.argv[1]).resolve()
 version = sys.argv[2]
 archive = root / "dist" / f"netbot-{version}.zip"
 archive.parent.mkdir(exist_ok=True)
-include = [pathlib.Path("README.md"), pathlib.Path("pyproject.toml"), pathlib.Path("install.sh"),
+include = [pathlib.Path("README.md"), pathlib.Path("pyproject.toml"), pathlib.Path("install.sh"), pathlib.Path("bootstrap.sh"),
            pathlib.Path("uninstall.sh"), pathlib.Path("netbot"), pathlib.Path("config/topology.yaml"),
            pathlib.Path("launchd/com.netbot.watch.plist"), pathlib.Path("systemd/netbot-watch.service"),
            pathlib.Path("openrc/netbot-watch")]

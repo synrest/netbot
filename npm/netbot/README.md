@@ -11,6 +11,11 @@ artifacts are never removed or rewritten by an application upgrade.
 
 The package does not install a scheduler, accept proposals, run discovery,
 reconcile SSH, mutate Tailscale, or require sudo. The current unpublished
-development package uses `NETBOT_RELEASE_ARTIFACT` and
-`NETBOT_RELEASE_SHA256`; a published package will carry equivalent immutable
-release metadata.
+development package may override the artifact with `NETBOT_RELEASE_ARTIFACT`
+and `NETBOT_RELEASE_SHA256`; the package release metadata otherwise points to
+the immutable version-specific GitHub asset and its trusted digest.
+
+The same release ZIP can be installed without npm through the published
+`bootstrap.sh VERSION IMMUTABLE_ZIP_URL SHA256` GitHub Release asset. That
+path verifies the digest and delegates to the release's existing `install.sh
+--no-service`, converging on the same versioned root and stable launcher.
