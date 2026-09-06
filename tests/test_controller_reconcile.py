@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from netbot.controller_reconcile import reconcile_controller
+from netbot.models import TailscaleNode
 
 
 TOPOLOGY = """version: 1
@@ -39,7 +40,8 @@ class ControllerReconcileTests(unittest.TestCase):
 
     def test_targeted_local_no_change_is_ok(self):
         config, db = self.fixture()
-        with patch("netbot.controller_reconcile.build_apply_plan", return_value=self.plan("arasaka")):
+        with patch("netbot.controller_reconcile.discover", return_value=([], "offline")), \
+             patch("netbot.controller_reconcile.build_apply_plan", return_value=self.plan("arasaka")):
             result = reconcile_controller(config, db, target="arasaka", dry_run=True)
         self.assertEqual(result["status"], "OK")
         self.assertEqual(result["summary"]["unchanged"], 1)
@@ -47,7 +49,8 @@ class ControllerReconcileTests(unittest.TestCase):
     def test_unavailable_target_is_partial_and_other_target_continues(self):
         config, db = self.fixture()
         plans = [self.plan("arasaka"), self.plan("kiroshi", "TARGET_UNAVAILABLE", "BLOCKED")]
-        with patch("netbot.controller_reconcile.build_apply_plan", side_effect=plans):
+        with patch("netbot.controller_reconcile.discover", return_value=([], "offline")), \
+             patch("netbot.controller_reconcile.build_apply_plan", side_effect=plans):
             result = reconcile_controller(config, db, dry_run=True)
         self.assertEqual(result["status"], "PARTIAL")
         self.assertEqual(result["summary"]["unchanged"], 1)
@@ -56,7 +59,8 @@ class ControllerReconcileTests(unittest.TestCase):
     def test_live_change_uses_existing_apply_path(self):
         config, db = self.fixture()
         plan = self.plan("arasaka", "READY", "REPLACE")
-        with patch("netbot.controller_reconcile.build_apply_plan", return_value=plan), \
+        with patch("netbot.controller_reconcile.discover", return_value=([], "offline")), \
+             patch("netbot.controller_reconcile.build_apply_plan", return_value=plan), \
              patch("netbot.controller_reconcile.apply_target", return_value={"result": "WRITE_VERIFIED"}) as apply:
             result = reconcile_controller(config, db, target="arasaka")
         apply.assert_called_once_with(plan, config)
@@ -65,10 +69,79 @@ class ControllerReconcileTests(unittest.TestCase):
     def test_dry_run_never_calls_apply(self):
         config, db = self.fixture()
         plan = self.plan("arasaka", "READY", "CREATE")
-        with patch("netbot.controller_reconcile.build_apply_plan", return_value=plan), \
+        with patch("netbot.controller_reconcile.discover", return_value=([], "offline")), \
+             patch("netbot.controller_reconcile.build_apply_plan", return_value=plan), \
              patch("netbot.controller_reconcile.apply_target") as apply:
             reconcile_controller(config, db, target="arasaka", dry_run=True)
         apply.assert_not_called()
+
+    def offline_fixture(self):
+        root = Path(tempfile.mkdtemp())
+        config = root / "config" / "topology.yaml"
+        config.parent.mkdir()
+        config.write_text("""version: 1
+authority: arasaka
+peer_policy:
+  default: topology
+hosts:
+  arasaka:
+    bindings:
+      ssh:
+        aliases: [arasaka]
+        user: zero
+      tailscale:
+        node_id: arasaka-id
+  offline:
+    bindings:
+      ssh:
+        aliases: [offline]
+        user: zero
+      tailscale:
+        node_id: offline-id
+  offline-two:
+    bindings:
+      ssh:
+        aliases: [offline-two]
+        user: zero
+      tailscale:
+        node_id: offline-two-id
+  unknown:
+    bindings:
+      ssh:
+        aliases: [unknown]
+        user: zero
+      tailscale:
+        node_id: unknown-id
+""")
+        return config, root / "state" / "netbot.sqlite3"
+
+    def test_known_offline_target_skips_remote_planning(self):
+        config, db = self.offline_fixture()
+        nodes = [TailscaleNode("offline-id", "offline", None, [], False, "linux", None),
+                 TailscaleNode("offline-two-id", "offline-two", None, [], False, "linux", None)]
+        with patch("netbot.controller_reconcile.discover", return_value=(nodes, None)), \
+             patch("netbot.controller_reconcile.build_apply_plan", return_value=self.plan("arasaka")) as build:
+            result = reconcile_controller(config, db, dry_run=True)
+        self.assertEqual([call.args[1] for call in build.call_args_list], ["arasaka", "unknown"])
+        offline = next(item for item in result["targets"] if item["target_identity"] == "offline")
+        self.assertEqual(offline["result"], "TARGET_UNAVAILABLE")
+        offline_two = next(item for item in result["targets"] if item["target_identity"] == "offline-two")
+        self.assertEqual(offline_two["result"], "TARGET_UNAVAILABLE")
+        self.assertEqual(result["summary"]["unavailable"], 2)
+
+    def test_unknown_availability_keeps_existing_safe_path(self):
+        config, db = self.offline_fixture()
+        with patch("netbot.controller_reconcile.discover", return_value=([], "status unavailable")), \
+             patch("netbot.controller_reconcile.build_apply_plan", side_effect=lambda c, identity, db_path: self.plan(identity)) as build:
+            reconcile_controller(config, db, dry_run=True)
+        self.assertEqual(build.call_count, 4)
+
+    def test_keyboard_interrupt_stops_controller(self):
+        config, db = self.fixture()
+        with patch("netbot.controller_reconcile.discover", return_value=([], "offline")), \
+             patch("netbot.controller_reconcile.build_apply_plan", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                reconcile_controller(config, db, dry_run=True)
 
 
 if __name__ == "__main__":
