@@ -12,6 +12,21 @@ from .discovery.tailscale import discover
 from .state import State
 from .apply_target import TargetApplyPlan
 
+# Stable process status contract for the controller command.  These values are
+# intentionally separate from SSH/remote exit codes: they describe the
+# controller run as a whole.
+RECONCILE_EXIT_CODES = {
+    "OK": 0,
+    "PARTIAL": 10,
+    "BLOCKED": 20,
+    "FAILED": 30,
+}
+
+
+def reconcile_exit_code(result: dict[str, Any]) -> int:
+    """Map a controller JSON result to its stable process exit status."""
+    return RECONCILE_EXIT_CODES.get(result.get("status"), RECONCILE_EXIT_CODES["FAILED"])
+
 
 def _eligible(host) -> bool:
     if host.attrs.get("lifecycle") == "retired" or host.attrs.get("superseded_by"):

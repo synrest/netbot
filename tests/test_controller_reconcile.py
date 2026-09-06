@@ -1,10 +1,13 @@
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from netbot.controller_reconcile import reconcile_controller
+from netbot.controller_reconcile import reconcile_controller, reconcile_exit_code
+from netbot.cli import main
 from netbot.models import TailscaleNode
 
 
@@ -142,6 +145,28 @@ hosts:
              patch("netbot.controller_reconcile.build_apply_plan", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 reconcile_controller(config, db, dry_run=True)
+
+    def test_exit_code_contract(self):
+        self.assertEqual(reconcile_exit_code({"status": "OK"}), 0)
+        self.assertEqual(reconcile_exit_code({"status": "PARTIAL"}), 10)
+        self.assertEqual(reconcile_exit_code({"status": "BLOCKED"}), 20)
+        self.assertEqual(reconcile_exit_code({"status": "FAILED"}), 30)
+        self.assertEqual(reconcile_exit_code({"status": "unexpected"}), 30)
+
+    def test_cli_emits_json_for_nonzero_controller_status(self):
+        payload = {"controller_id": "c", "dry_run": True, "status": "PARTIAL",
+                   "targets": [], "summary": {}}
+        output = StringIO()
+        with patch("netbot.cli.reconcile_controller", return_value=payload), redirect_stdout(output):
+            with self.assertRaises(SystemExit) as raised:
+                main(["reconcile", "--dry-run"])
+        self.assertEqual(raised.exception.code, 10)
+        self.assertIn('"status": "PARTIAL"', output.getvalue())
+
+    def test_controller_exception_is_not_reclassified(self):
+        with patch("netbot.cli.reconcile_controller", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                main(["reconcile", "--dry-run"])
 
 
 if __name__ == "__main__":

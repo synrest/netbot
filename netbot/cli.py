@@ -25,7 +25,7 @@ from .peer_policy import expected_peers, load_peer_policy, PolicyValidationError
 from .render_target import render_target
 from .apply_target import build_apply_plan, apply_target, resolve_observation_transport
 from .target_activation import build_activation_plan, activate_target
-from .controller_reconcile import reconcile_controller
+from .controller_reconcile import reconcile_controller, reconcile_exit_code
 from .managed_adoption import adoption_plan as managed_adoption_plan, apply_adoption as apply_managed_adoption
 
 def main(argv=None):
@@ -37,9 +37,10 @@ def main(argv=None):
         print("Infrastructure / server:\n  sudo tailscale up --ssh --advertise-tags=tag:netbot-bootstrap\n\nPersonal / end-user:\n  sudo tailscale up --ssh\n\nAlready enrolled:\n  sudo tailscale set --ssh\n\nNetbot will discover the node after it joins the tailnet.")
         return
     if a.command == "reconcile":
-        print(json.dumps(reconcile_controller(a.config, a.db, target=a.target_filter,
-                                              dry_run=a.dry_run), indent=2, sort_keys=True))
-        return
+        result = reconcile_controller(a.config, a.db, target=a.target_filter,
+                                      dry_run=a.dry_run)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        raise SystemExit(reconcile_exit_code(result))
     if a.command == "version":
         if a.host or a.target:
             p.error("usage: netbot version")
