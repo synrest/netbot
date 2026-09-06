@@ -1,6 +1,7 @@
 import argparse, json, os, sys
 from pathlib import Path
 from .config import load_topology, load_agent_settings
+from .config import load_topology_authority
 from .discovery.ssh import inspect_ssh
 from .reconcile import reconcile, generate, migration_plan
 from .generate.ssh import plan as ssh_plan, write_preview
@@ -67,7 +68,10 @@ def main(argv=None):
         else:
             _, hosts = load_topology(a.config)
             graph = state.discovery_graph()
-            payload = generate_proposals(hosts, graph, state.discovery_evidence())
+            payload = generate_proposals(
+                hosts, graph, state.discovery_evidence(),
+                controller_id=state.controller_identity(create=False),
+                topology_authority=load_topology_authority(a.config))
             if a.proposal_type:
                 payload = [item for item in payload if item["proposal_type"] == a.proposal_type]
             if a.proposal_node:

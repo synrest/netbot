@@ -75,6 +75,15 @@ def _accepted(hosts: Iterable[Any]):
     return by_provider, by_identity
 
 
+def resolve_observation_to_topology_identity(observation_id: str | None, *,
+                                             controller_id: str | None = None,
+                                             topology_authority: str | None = None) -> str | None:
+    """Correlate only the current controller observation through explicit context."""
+    if observation_id and controller_id and topology_authority and observation_id == controller_id:
+        return topology_authority
+    return None
+
+
 def _node_evidence(rows: list[dict[str, Any]], run_id: str | None):
     rows = [row for row in rows if run_id is None or row.get("run_id") == run_id]
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -108,7 +117,9 @@ def _history_stats(all_nodes: list[dict[str, Any]], key: str):
 
 
 def generate_proposals(hosts: list[Any], current_graph: dict[str, Any],
-                       historical_evidence: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+                       historical_evidence: dict[str, Any] | None = None, *,
+                       controller_id: str | None = None,
+                       topology_authority: str | None = None) -> list[dict[str, Any]]:
     """Return deterministic proposals; this function has no mutation side effects."""
     historical_evidence = historical_evidence or current_graph
     accepted_by_provider, accepted_by_identity = _accepted(hosts)
@@ -203,8 +214,15 @@ def generate_proposals(hosts: list[Any], current_graph: dict[str, Any],
         if edge.get("provenance") != "SSH_CONFIG_HUMAN":
             continue
         source = edge.get("source")
+        correlated_source = resolve_observation_to_topology_identity(
+            source, controller_id=controller_id, topology_authority=topology_authority)
         alias = edge.get("alias")
-        if (source, alias) in accepted_aliases:
+        # The accepted topology schema represents the controller's outgoing
+        # SSH projection on destination hosts.  Only suppress aliases from a
+        # source proven to be the local topology authority; unresolved source
+        # namespaces must continue producing proposals.
+        if correlated_source == topology_authority and any(alias == accepted_alias
+                                                           for _, accepted_alias in accepted_aliases):
             continue
         target = edge.get("destination")
         binding = None

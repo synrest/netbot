@@ -6,6 +6,7 @@ from pathlib import Path
 from netbot.discovery.proposals import (
     ALREADY_ACCEPTED, CONFLICT, EXISTING_IDENTITY_REBIND_CANDIDATE,
     NEW_IDENTITY_CANDIDATE, RELATIONSHIP_CANDIDATE, generate_proposals,
+    resolve_observation_to_topology_identity,
 )
 from netbot.discovery.acceptance import accept_proposal
 from netbot.state import State
@@ -67,6 +68,36 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(result[0]["proposal_type"], RELATIONSHIP_CANDIDATE)
         self.assertEqual(result[0]["source_identity"], "b")
         self.assertNotEqual(result[0]["source_identity"], result[0]["target_entity"])
+
+    def test_controller_observation_correlates_to_authority_without_rewriting_provenance(self):
+        controller = "controller-uuid"
+        accepted = host("arasaka", aliases=("existing",))
+        edge = self.edge(controller, "machine20", "existing")
+        result = generate_proposals([accepted], graph([], [edge]),
+                                    controller_id=controller, topology_authority="arasaka")
+        self.assertEqual(result, [])
+        self.assertEqual(edge["source"], controller)
+
+    def test_correlated_controller_does_not_suppress_new_alias(self):
+        controller = "controller-uuid"
+        accepted = host("arasaka", aliases=("existing",))
+        edge = self.edge(controller, "machine20", "new-alias")
+        result = generate_proposals([accepted], graph([], [edge]),
+                                    controller_id=controller, topology_authority="arasaka")
+        self.assertEqual(result[0]["proposal_type"], RELATIONSHIP_CANDIDATE)
+        self.assertEqual(result[0]["source_identity"], controller)
+
+    def test_correlated_controller_matches_destination_topology_aliases(self):
+        controller = "controller-uuid"
+        accepted = [host("arasaka", aliases=("arasaka",)), host("oracle", aliases=("oracle",))]
+        edge = self.edge(controller, "100.72.113.101", "oracle")
+        result = generate_proposals(accepted, graph([], [edge]),
+                                    controller_id=controller, topology_authority="arasaka")
+        self.assertEqual(result, [])
+
+    def test_source_correlation_requires_exact_explicit_context(self):
+        self.assertIsNone(resolve_observation_to_topology_identity("arasaka", controller_id="other", topology_authority="arasaka"))
+        self.assertIsNone(resolve_observation_to_topology_identity("controller-uuid", controller_id="controller-uuid", topology_authority=None))
 
     def test_rebind_requires_multiple_continuity_facts(self):
         old = self.node("tailscale:old", "old", "old-name")
