@@ -11,6 +11,7 @@ from .controller_reconcile import reconcile_controller
 from .discovery.cycle import run_cycle
 from .discovery.proposals import generate_proposals
 from .state import State
+from .events import record_maintenance_events
 
 
 def _proposal_summary(items):
@@ -68,6 +69,14 @@ def run_maintenance(config_path: Path, db_path: Path, *, dry_run=False,
             state.close()
 
         reconciliation = reconcile_runner(config_path, db_path, dry_run=dry_run)
+        event_error = None
+        if not dry_run:
+            try:
+                event_state = State(db_path)
+                record_maintenance_events(event_state, discovery, proposals, reconciliation)
+                event_state.close()
+            except Exception as exc:
+                event_error = str(exc)
         rs = reconciliation.get("summary", {})
         summary = {
             "discovery_status": discovery.get("status"),
@@ -79,8 +88,11 @@ def run_maintenance(config_path: Path, db_path: Path, *, dry_run=False,
             "reconcile_blocked": rs.get("blocked", 0),
             "reconcile_failed": rs.get("failed", 0),
         }
-        return {"status": _aggregate(discovery, reconciliation), "dry_run": dry_run,
+        result_status = "FAILED" if event_error else _aggregate(discovery, reconciliation)
+        result = {"status": result_status, "dry_run": dry_run,
                 "discovery": discovery, "proposals": _proposal_summary(proposals),
                 "reconciliation": reconciliation, "summary": summary,
                 "topology_changed": False, "proposal_acceptance_performed": False}
-
+        if event_error:
+            result["event_persistence_error"] = event_error
+        return result

@@ -18,6 +18,7 @@ python3 -m netbot.cli maintain --dry-run
 python3 -m netbot.cli scheduler install
 python3 -m netbot.cli scheduler status
 python3 -m netbot.cli scheduler remove
+python3 -m netbot.cli events
 python3 -m netbot.cli inspect orion
 python3 -m netbot.cli agent status orion
 python3 -m netbot.cli enroll

@@ -297,5 +297,55 @@ class State:
         except sqlite3.OperationalError:
             return None
         return dict(row) if row else None
+
+    def record_event(self, event_type, severity, subject_identity, stable_key,
+                     summary, details=None, occurred_at=None, *, condition=False):
+        """Record one meaningful transition, coalescing an active condition."""
+        from datetime import datetime, timezone
+        occurred_at = occurred_at or datetime.now(timezone.utc).isoformat()
+        self.db.execute("""CREATE TABLE IF NOT EXISTS events(
+          event_id INTEGER PRIMARY KEY, event_type TEXT NOT NULL, severity TEXT NOT NULL,
+          subject_identity TEXT, stable_key TEXT NOT NULL, first_seen_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL, occurrence_count INTEGER NOT NULL DEFAULT 1,
+          summary TEXT NOT NULL, details_json TEXT NOT NULL, resolved_at TEXT)""")
+        row = self.db.execute("SELECT * FROM events WHERE stable_key=? AND resolved_at IS NULL ORDER BY event_id DESC LIMIT 1", (stable_key,)).fetchone()
+        payload = json.dumps(details or {}, sort_keys=True)
+        if row:
+            self.db.execute("UPDATE events SET last_seen_at=?,occurrence_count=occurrence_count+1,details_json=? WHERE event_id=?", (occurred_at, payload, row["event_id"]))
+            return {"event_id": row["event_id"], "created": False}
+        cur = self.db.execute("INSERT INTO events(event_type,severity,subject_identity,stable_key,first_seen_at,last_seen_at,summary,details_json) VALUES (?,?,?,?,?,?,?,?)", (event_type, severity, subject_identity, stable_key, occurred_at, occurred_at, summary, payload))
+        return {"event_id": cur.lastrowid, "created": True}
+
+    def resolve_event(self, stable_key, resolved_at=None):
+        from datetime import datetime, timezone
+        resolved_at = resolved_at or datetime.now(timezone.utc).isoformat()
+        try:
+            row = self.db.execute("SELECT * FROM events WHERE stable_key=? AND resolved_at IS NULL ORDER BY event_id DESC LIMIT 1", (stable_key,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if row:
+            self.db.execute("UPDATE events SET resolved_at=? WHERE event_id=?", (resolved_at, row["event_id"]))
+        return dict(row) if row else None
+
+    def event_occurrence(self, stable_key):
+        try:
+            row = self.db.execute("SELECT occurrence_count FROM events WHERE stable_key=? ORDER BY event_id DESC LIMIT 1", (stable_key,)).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+        return int(row[0]) if row else 0
+
+    def events(self, limit=10):
+        try:
+            rows = self.db.execute("""SELECT event_id,event_type,severity,subject_identity,summary,
+              first_seen_at,last_seen_at,occurrence_count,resolved_at,stable_key
+              FROM events ORDER BY (resolved_at IS NULL) DESC,
+              CASE severity WHEN 'ERROR' THEN 0 WHEN 'ATTENTION' THEN 1 ELSE 2 END,
+              last_seen_at DESC,event_id DESC LIMIT ?""", (min(max(int(limit), 0), 10),)).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in rows]
+
+    def commit_events(self):
+        self.db.commit()
     def latest(self):
         row=self.db.execute("SELECT * FROM reconciliations ORDER BY id DESC LIMIT 1").fetchone(); return dict(row) if row else None
