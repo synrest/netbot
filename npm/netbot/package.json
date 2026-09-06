@@ -1,9 +1,8 @@
 {
   "name": "@synrest/netbot",
-  "version": "0.4.0",
-  "description": "Bootstrapper for the Python Netbot application",
-  "bin": { "netbot": "bin/netbot.js" },
+  "version": "0.4.2",
+  "description": "Agentless topology discovery and SSH reconciliation for private networks.",
   "scripts": { "postinstall": "node lib/postinstall.js", "test": "node --test test/*.test.js" },
   "engines": { "node": ">=18" },
-  "files": ["bin", "lib", "release.json"]
+  "files": ["lib", "release.json"]
 }

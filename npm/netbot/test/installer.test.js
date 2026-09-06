@@ -24,6 +24,9 @@ test('npm and Python versions are synchronized', () => {
   const pyproject = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'pyproject.toml'), 'utf8');
   assert.match(pyproject, new RegExp(`version = "${npmVersion.replace('.', '\\.')}`));
 });
+test('npm does not claim the Netbot launcher bin', () => {
+  assert.equal(Object.prototype.hasOwnProperty.call(require('../package.json'), 'bin'), false);
+});
 test('direct bootstrap is release-only and never enables services', () => {
   const script = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'bootstrap.sh'), 'utf8');
   assert.match(script, /netbot-\$VERSION\.zip/);

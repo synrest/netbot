@@ -26,7 +26,7 @@ python3 -m netbot.cli enroll
 
 The default database is `state/netbot.sqlite3` and generated output is `generated/topology.json`. Override paths with `--config`, `--db`, and `--generated`.
 
-Distribution is provided through the thin npm bootstrap package (`@synrest/netbot`, not yet published). Install with `npm install -g @synrest/netbot`; it installs a verified, versioned Python payload under the existing user-local Netbot root and keeps `~/.local/bin/netbot` stable across upgrades. Installing or upgrading the application does not enable scheduling or accept topology proposals; use `netbot scheduler install` explicitly.
+Distribution is provided through the thin npm bootstrap package (`@synrest/netbot`). Install with `npm install -g @synrest/netbot`; it installs a verified, versioned Python payload under the existing user-local Netbot root and keeps `~/.local/bin/netbot` stable across upgrades. Installing or upgrading the application does not enable scheduling or accept topology proposals; use `netbot scheduler install` explicitly.
 
 Node/npm is optional. A published GitHub Release also provides a version-specific `netbot-<version>.zip` and direct `bootstrap.sh`; the bootstrap verifies the supplied SHA-256 and delegates to the existing user-level installer with `--no-service`. It never installs scheduling, runs Netbot, changes topology, or mutates Tailscale. The direct form is: `bootstrap.sh VERSION IMMUTABLE_ZIP_URL SHA256`.
 
@@ -48,7 +48,7 @@ Phase 1 performs no remote SSH commands and no Tailscale writes. It reads the lo
 
 The supported Python baseline is 3.10+, including the platform's `venv`/`ensurepip` component required by the installer (often packaged separately as `python3-venv` on Debian). SSH access probes are explicit (`netbot access` or `netbot inspect HOST --probe`); routine status and reconciliation do not probe remote hosts.
 
-Netbot 0.4.0 supports two deployment modes. For development, clone the repository and run `./install.sh --dev`. For production, unpack a versioned `netbot-X.Y.Z.zip` and run `./install.sh`; Git and the extracted source tree are not required afterward. The installer keeps a private per-user runtime under `~/Library/Application Support/Netbot/`, with stable wrappers in `~/.local/bin/`, so users do not need to activate a virtual environment or configure import paths.
+Netbot 0.4.2 supports two deployment modes. For development, clone the repository and run `./install.sh --dev`. For production, unpack a versioned `netbot-X.Y.Z.zip` and run `./install.sh`; Git and the extracted source tree are not required afterward. The installer keeps a private per-user runtime under `~/Library/Application Support/Netbot/`, with stable wrappers in `~/.local/bin/`, so users do not need to activate a virtual environment or configure import paths.
 
 Production installation preserves `config/topology.yaml` and `state/netbot.sqlite3` outside versioned runtime directories. Reinstalling switches the private runtime without deleting desired topology or history. `./uninstall.sh` removes only Netbot runtime integration, wrappers, installed versions, transient runtime files, and logs; it retains configuration and state, the user's SSH configuration/keys, Tailscale, and remote hosts.
 
