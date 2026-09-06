@@ -17,6 +17,9 @@ hosts:
       ssh:
         aliases: [arasaka]
         user: zero
+        connections:
+          orion:
+            identity_file: ~/.ssh/id_ed25519_arasaka
   kiroshi:
     bindings:
       tailscale:
@@ -106,6 +109,25 @@ class RenderTargetTests(unittest.TestCase):
         self.assertEqual(render_inputs((item,)),
                          "Host orion\n    HostName orion\n    User lourdes\n    Port 22\n"
                          "    IdentityFile ~/.ssh/id_ed25519_arasaka\n")
+
+    def test_source_scoped_identity_file_is_rendered_only_for_declared_destination(self):
+        directory, path = self.write()
+        self.addCleanup(directory.cleanup)
+        result = render_target(path, "kiroshi")
+        orion = next(item for item in result.inputs if item.alias == "orion")
+        self.assertIsNone(orion.identity_file)
+        source_text = TOPOLOGY.replace(
+            "  kiroshi:\n", "  kiroshi:\n", 1)
+        source_text = source_text.replace(
+            "        aliases: [kiroshi]\n        user: rafael\n",
+            "        aliases: [kiroshi]\n        user: rafael\n        connections:\n          orion:\n            identity_file: ~/.ssh/id_ed25519_arasaka\n", 1)
+        directory2, path2 = self.write(source_text)
+        self.addCleanup(directory2.cleanup)
+        result2 = render_target(path2, "kiroshi")
+        # The declaration is source-scoped: it affects only the named pair.
+        self.assertEqual(next(item for item in result2.inputs if item.alias == "orion").identity_file,
+                         "~/.ssh/id_ed25519_arasaka")
+        self.assertIsNone(next(item for item in result2.inputs if item.alias == "arasaka").identity_file)
 
     def test_missing_user_is_structured_and_no_partial_claim(self):
         directory, path = self.write(TOPOLOGY.replace("        user: rafael\n", "", 1))

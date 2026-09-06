@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .config import load_topology
-from .desired_route import desired_route
+from .desired_route import desired_route, connection_metadata
 from .discovery.remote_ssh import validate_alias
 from .models import DesiredHost
 from .peer_policy import PolicyValidationError, expected_peers, load_peer_policy
@@ -79,6 +79,7 @@ def render_target(config_path, target_identity: str) -> TargetRender:
         return TargetRender(target_identity, peer_result.state, reason=peer_result.reason)
 
     by_identity = {host.identity: host for host in hosts}
+    source_host = by_identity.get(target_identity)
     aliases: dict[str, str] = {}
     inputs: list[RenderInput] = []
     errors: list[RenderInput] = []
@@ -119,6 +120,8 @@ def render_target(config_path, target_identity: str) -> TargetRender:
             aliases[alias] = decision.destination_identity
             inputs.append(RenderInput(decision.destination_identity, alias, route.hostname, user,
                                       route.port, "RENDERABLE", "complete desired render inputs",
+                                      (connection_metadata(source_host, decision.destination_identity).get("identity_file")
+                                       if source_host else None) or
                                       ssh.get("identity_file") or ssh.get("identityfile")))
 
     if errors:

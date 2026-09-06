@@ -37,6 +37,12 @@ def _ssh(host: DesiredHost) -> dict:
     return host.attrs.get("bindings", {}).get("ssh", {})
 
 
+def connection_metadata(source: DesiredHost, destination_identity: str) -> dict:
+    """Return explicit source-to-destination SSH client metadata."""
+    return (_ssh(source).get("connections", {}).get(destination_identity, {})
+            if isinstance(_ssh(source).get("connections", {}), dict) else {})
+
+
 def _tailscale(host: DesiredHost) -> dict:
     return host.attrs.get("bindings", {}).get("tailscale", {})
 

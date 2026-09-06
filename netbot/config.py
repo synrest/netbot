@@ -12,7 +12,7 @@ def _scalar(value: str):
 
 def load_topology(path: Path) -> tuple[int, list[DesiredHost]]:
     # Deliberately small parser for the stable, dependency-free topology subset.
-    version = 1; hosts: list[DesiredHost] = []; current = None; pending_list = None; section = "none"
+    version = 1; hosts: list[DesiredHost] = []; current = None; pending_list = None; pending_connection = None; section = "none"
     for raw in path.read_text().splitlines():
         line = raw.split("#", 1)[0].rstrip()
         if not line.strip(): continue
@@ -27,16 +27,25 @@ def load_topology(path: Path) -> tuple[int, list[DesiredHost]]:
         elif section != "hosts":
             continue
         elif indent == 2 and text.endswith(":"):
-            current = DesiredHost(text[:-1]); hosts.append(current); pending_list = None
+            current = DesiredHost(text[:-1]); hosts.append(current); pending_list = None; pending_connection = None
         elif indent == 4 and current and text == "bindings:":
-            current.attrs["bindings"] = {}; pending_list = None
+            current.attrs["bindings"] = {}; pending_list = None; pending_connection = None
         elif indent == 6 and current and current.attrs.get("bindings") is not None and text.endswith(":"):
-            current.attrs["bindings"][text[:-1]] = {}; pending_list = None
+            current.attrs["bindings"][text[:-1]] = {}; pending_list = None; pending_connection = None
         elif indent == 8 and current and current.attrs.get("bindings") is not None and ":" in text:
             key, val = text.split(":", 1); key = key.strip(); val = val.strip()
             target = current.attrs["bindings"].get("tailscale", {}) if key in ("node_id", "name") else current.attrs["bindings"].setdefault("ssh", {})
-            if val: target[key] = _scalar(val); pending_list = None
-            else: target[key] = []; pending_list = key
+            if key == "connections" and not val:
+                target[key] = {}; pending_list = None; pending_connection = None
+            elif val: target[key] = _scalar(val); pending_list = None; pending_connection = None
+            else: target[key] = []; pending_list = key; pending_connection = None
+        elif indent == 10 and current and text.endswith(":"):
+            ssh = current.attrs.get("bindings", {}).get("ssh", {})
+            if isinstance(ssh.get("connections"), dict):
+                pending_connection = text[:-1].strip(); ssh["connections"][pending_connection] = {}
+        elif indent == 12 and current and pending_connection and ":" in text:
+            key, val = text.split(":", 1)
+            current.attrs["bindings"]["ssh"]["connections"][pending_connection][key.strip()] = _scalar(val)
         elif indent == 10 and current and current.attrs.get("bindings") is not None and text.startswith("-") and pending_list:
             current.attrs["bindings"].setdefault("ssh", {}).setdefault(pending_list, []).append(_scalar(text[1:].strip()))
         elif indent == 4 and current and ":" in text:

@@ -23,6 +23,11 @@ hosts:
         aliases:
           - arasaka
         user: zero
+        connections:
+          orion:
+            identity_file: ~/.ssh/id_ed25519_arasaka
+          netbot-test:
+            identity_file: ~/.ssh/id_ed25519_arasaka
   kiroshi:
     class: core
     kind: physical
