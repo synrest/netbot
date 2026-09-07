@@ -121,6 +121,32 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(data["offline"], 0)
         self.assertIn("Unknown", self.invoke())
 
+    def test_topology_uses_exact_provider_row_for_online_state(self):
+        state = State(self.db)
+        state.record_discovery_cycle(
+            "run-provider", "controller", "2026-01-01T00:00:00+00:00", "2026-01-01T00:01:00+00:00",
+            "OK", "OK", "COMPLETE", None,
+            {"nodes": [{"observation_identity": "tailscale:orion-id", "observed_from": "controller",
+                         "aliases": [], "provider_peers": []}], "relationships": [], "sources": []},
+            [{"provider": "tailscale", "provider_node_id": "orion-id", "advertised_name": "different-name",
+              "addresses": ["100.64.0.9"], "online": True, "metadata": {},
+              "observed_at": "2026-01-01T00:00:00+00:00"}])
+        state.close()
+        view = topology(self.config, self.db)
+        self.assertEqual(next(node for node in view["accepted"] if node["identity"] == "orion")["state"], "online")
+
+    def test_topology_does_not_use_hostname_or_ip_as_provider_identity_fallback(self):
+        state = State(self.db)
+        state.record_discovery_cycle(
+            "run-provider", "controller", "2026-01-01T00:00:00+00:00", "2026-01-01T00:01:00+00:00",
+            "OK", "OK", "COMPLETE", None,
+            {"nodes": [], "relationships": [], "sources": []},
+            [{"provider": "tailscale", "provider_node_id": "other-id", "advertised_name": "orion",
+              "addresses": ["100.64.0.9"], "online": True, "metadata": {},
+              "observed_at": "2026-01-01T00:00:00+00:00"}])
+        state.close()
+        self.assertEqual(next(node for node in topology(self.config, self.db)["accepted"] if node["identity"] == "orion")["state"], "unknown")
+
     def test_sparse_inspect_omits_empty_sections_and_raw_ids(self):
         output = self.invoke("inspect", "orion")
         self.assertNotIn("Network\n", output)

@@ -203,6 +203,33 @@ Host human
         self.assertEqual(run["crawl_status"], "COMPLETE")
         self.assertTrue(graph["nodes"])
 
+    def test_generic_and_provider_evidence_coexist_with_canonical_provider_fields(self):
+        root = self.home(); config = root / "topology.yaml"; config.write_text("version: 1\nhosts:\n")
+        db = root / "history.sqlite3"
+        provider = SimpleNamespace(name="tailscale", observe=lambda: ([DiscoveredPeer(
+            "tailscale", "node-1", "machine20", ["100.0.0.20"], True)], None))
+        result = run_cycle(config, db, home=root, provider=provider, runner=FakeRunner())
+        state = State(db)
+        rows = state.db.execute("""SELECT evidence_key,provider,provider_node_id,
+            advertised_name,online FROM discovery_node_evidence WHERE run_id=?
+            ORDER BY id""", (result["cycle_id"],)).fetchall()
+        state.close()
+        provider_rows = [row for row in rows if row[1] == "tailscale"]
+        generic_rows = [row for row in rows if row[1] is None]
+        self.assertEqual(len(provider_rows), 1)
+        self.assertGreaterEqual(len(generic_rows), 1)
+        self.assertEqual(tuple(provider_rows[0]), ("provider:tailscale:node-1", "tailscale", "node-1", "machine20", "True"))
+
+    def test_repeated_provider_persistence_is_idempotent(self):
+        root = Path(tempfile.mkdtemp()); db = root / "history.sqlite3"; state = State(db)
+        graph = {"nodes": [{"observation_identity": "tailscale:node-1", "observed_from": "controller",
+                             "aliases": [], "provider_peers": []}], "relationships": [], "sources": []}
+        peer = {"provider": "tailscale", "provider_node_id": "node-1", "advertised_name": "machine20",
+                "addresses": ["100.0.0.20"], "online": True, "metadata": {}, "observed_at": "t1"}
+        state.record_discovery_cycle("run-1", "controller", "t1", "t1", "OK", "OK", "COMPLETE", None, graph, [peer, peer])
+        self.assertEqual(state.db.execute("SELECT count(*) FROM discovery_node_evidence WHERE provider='tailscale'").fetchone()[0], 1)
+        state.close()
+
     def test_dry_run_does_not_persist_discovery_history(self):
         root = self.home(); config = root / "topology.yaml"; config.write_text("version: 1\nhosts:\n")
         db = root / "history.sqlite3"

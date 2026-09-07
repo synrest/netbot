@@ -212,7 +212,14 @@ class State:
                                  "provider_peers": node.get("provider_peers", [])}, sort_keys=True),
                                  node.get("observed_at"), None))
             for peer in provider_peers:
-                key = f"{peer.get('provider')}:{peer.get('provider_node_id')}" if peer.get("provider_node_id") else f"{run_id}:peer:{peer.get('advertised_name')}"
+                # Provider evidence is a distinct evidence namespace.  The
+                # graph may contain a node for the same provider identity;
+                # keeping this key typed prevents its generic row from
+                # swallowing the canonical provider columns via INSERT OR
+                # IGNORE and the per-run uniqueness constraint.
+                key = (f"provider:{peer.get('provider')}:{peer.get('provider_node_id')}"
+                       if peer.get("provider_node_id")
+                       else f"provider:{run_id}:peer:{peer.get('advertised_name')}")
                 self.db.execute("INSERT OR IGNORE INTO discovery_node_evidence(run_id,evidence_key,observed_from,provider,provider_node_id,advertised_name,addresses_json,online,metadata_json,observed_at,topology_identity) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                                 (run_id, key, controller_id, peer.get("provider"), peer.get("provider_node_id"),
                                  peer.get("advertised_name"), json.dumps(peer.get("addresses", [])),
