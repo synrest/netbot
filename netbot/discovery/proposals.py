@@ -114,6 +114,33 @@ def resolve_observation_to_topology_identity(observation_id: str | None, *,
     return None
 
 
+def resolve_controller_topology_identity(controller_id: str | None, hosts: Iterable[Any],
+                                         current_graph: dict[str, Any] | None = None) -> str | None:
+    """Resolve a durable local controller ID through an exact provider self binding.
+
+    The durable controller ID remains the graph/evidence namespace.  This helper
+    only returns a topology identity when one unique accepted host has the exact
+    provider node ID observed as the local provider self node.
+    """
+    if not controller_id or not current_graph:
+        return None
+    self_ids = set()
+    for node in current_graph.get("nodes", []):
+        if node.get("observed_from") not in (None, controller_id):
+            continue
+        if node.get("provider") and node.get("provider_node_id") is not None and node.get("metadata", {}).get("_netbot_self"):
+            self_ids.add((str(node["provider"]), str(node["provider_node_id"])))
+        for peer in node.get("metadata", {}).get("provider_peers", []) or []:
+            if peer.get("metadata", {}).get("_netbot_self") and peer.get("provider_node_id") is not None:
+                self_ids.add((str(peer.get("provider", "tailscale")), str(peer["provider_node_id"])))
+    matches = []
+    for host in hosts:
+        binding = _bindings(host).get("tailscale", {})
+        if ("tailscale", str(binding.get("node_id"))) in self_ids and binding.get("node_id") is not None:
+            matches.append(host.identity)
+    return matches[0] if len(matches) == 1 else None
+
+
 def _node_evidence(rows: list[dict[str, Any]], run_id: str | None):
     rows = [row for row in rows if run_id is None or row.get("run_id") == run_id]
     grouped: dict[str, list[dict[str, Any]]] = {}

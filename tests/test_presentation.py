@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from netbot.cli import main
-from netbot.presentation import dashboard, topology, render_dashboard
+from netbot.presentation import dashboard, topology, render_dashboard, render_topology
 from netbot.state import State
 from netbot.discovery.acceptance import accept_node
 
@@ -146,6 +146,45 @@ class PresentationTests(unittest.TestCase):
               "observed_at": "2026-01-01T00:00:00+00:00"}])
         state.close()
         self.assertEqual(next(node for node in topology(self.config, self.db)["accepted"] if node["identity"] == "orion")["state"], "unknown")
+
+    def test_controller_display_uses_exact_provider_self_binding(self):
+        self.config.write_text("version: 1\nhosts:\n  arasaka:\n    class: core\n    bindings:\n      tailscale:\n        node_id: self-node\n")
+        state = State(self.db)
+        controller_id = state.controller_identity()
+        state.record_discovery_cycle(
+            "run-self", controller_id, "2026-01-01T00:00:00+00:00", "2026-01-01T00:01:00+00:00",
+            "OK", "OK", "COMPLETE", None,
+            {"nodes": [], "relationships": [], "sources": []},
+            [{"provider": "tailscale", "provider_node_id": "self-node", "advertised_name": "arasaka",
+              "addresses": [], "online": True, "metadata": {"_netbot_self": True},
+              "observed_at": "2026-01-01T00:00:00+00:00"}])
+        state.close()
+        self.assertEqual(dashboard(self.config, self.db)["controller"], "arasaka")
+        self.assertIn("Controller     arasaka", self.invoke("status"))
+
+    def test_topology_summary_separates_attention_from_conflicts(self):
+        state = State(self.db)
+        state.record_event("TARGET_UNAVAILABLE", "ATTENTION", "orion", "target:orion", "Target unavailable")
+        state.commit_events(); state.close()
+        rendered = render_topology(topology(self.config, self.db))
+        self.assertIn("1 attention · 0 conflicts", rendered)
+
+    def test_reconciliation_timestamp_is_labeled_accurately(self):
+        state = State(self.db)
+        run_id = state.begin("2026-01-01T00:00:00+00:00", "status")
+        state.finish(run_id, "2026-01-01T00:01:00+00:00", True, {}, "available", None)
+        state.close()
+        output = self.invoke("status")
+        self.assertIn("Last reconcile", output)
+        self.assertNotIn("Last maintain", output)
+
+    def test_reconciliation_json_retains_legacy_timestamp_alias(self):
+        state = State(self.db)
+        run_id = state.begin("2026-01-01T00:00:00+00:00", "status")
+        state.finish(run_id, "2026-01-01T00:01:00+00:00", True, {}, "available", None)
+        state.close()
+        payload = json.loads(self.invoke("status", "--json"))
+        self.assertEqual(payload["data"]["last_reconcile"], payload["data"]["last_maintain"])
 
     def test_sparse_inspect_omits_empty_sections_and_raw_ids(self):
         output = self.invoke("inspect", "orion")

@@ -19,7 +19,27 @@ def _emit(state, event_type, subject, stable_key, summary, details=None):
                               summary, details, condition=True)
 
 
-def record_maintenance_events(state, discovery, proposals, reconciliation):
+def _resolve_legacy_controller_events(state, controller_id, canonical_controller, accepted_aliases):
+    """Resolve only old UUID-sourced relationship attention proven redundant."""
+    if not controller_id or not canonical_controller or not accepted_aliases:
+        return
+    rows = state.db.execute("""SELECT stable_key,summary,details_json FROM events
+        WHERE event_type='NEW_TOPOLOGY_PROPOSAL' AND resolved_at IS NULL
+          AND subject_identity=?""", (controller_id,)).fetchall()
+    for row in rows:
+        try:
+            details = json.loads(row[2] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if details.get("proposal_type") != "RELATIONSHIP_CANDIDATE":
+            continue
+        alias = str(row[1] or "").split(": ", 1)[-1]
+        if alias in accepted_aliases:
+            state.resolve_event(row[0])
+
+
+def record_maintenance_events(state, discovery, proposals, reconciliation, *,
+                               canonical_controller=None, accepted_aliases=()):
     """Persist transitions after a non-dry maintenance result is complete."""
     created = []
     provider = discovery.get("provider", {})
@@ -46,6 +66,9 @@ def record_maintenance_events(state, discovery, proposals, reconciliation):
                      f"{kind}: {proposal.get('proposed_alias') or proposal.get('candidate_identity') or proposal.get('proposal_id')}",
                      {"proposal_id": proposal.get("proposal_id"), "proposal_type": kind})
         if item["created"]: created.append(item["event_id"])
+
+    _resolve_legacy_controller_events(state, discovery.get("controller_id"),
+                                      canonical_controller, set(accepted_aliases))
 
     for target in reconciliation.get("targets", []):
         identity = target.get("target_identity")

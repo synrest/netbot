@@ -67,6 +67,23 @@ class EventTests(unittest.TestCase):
         self.assertEqual(len(state.events(10)), 10)
         state.close()
 
+    def test_legacy_uuid_controller_relationship_event_is_resolved_only_for_known_alias(self):
+        state = self.state()
+        state.record_event("NEW_TOPOLOGY_PROPOSAL", "ATTENTION", "controller-uuid", "proposal:old",
+                           "RELATIONSHIP_CANDIDATE: oracle",
+                           {"proposal_id": "old", "proposal_type": "RELATIONSHIP_CANDIDATE"})
+        state.record_event("NEW_TOPOLOGY_PROPOSAL", "ATTENTION", "controller-uuid", "proposal:unrelated",
+                           "RELATIONSHIP_CANDIDATE: unknown",
+                           {"proposal_id": "unrelated", "proposal_type": "RELATIONSHIP_CANDIDATE"})
+        state.commit_events()
+        record_maintenance_events(
+            state, {**self.discovery(), "controller_id": "controller-uuid"}, [], self.reconcile(),
+            canonical_controller="arasaka", accepted_aliases=("oracle",))
+        rows = {row["stable_key"]: row for row in state.events(10)}
+        self.assertIsNotNone(rows["proposal:old"]["resolved_at"])
+        self.assertIsNone(rows["proposal:unrelated"]["resolved_at"])
+        state.close()
+
 
 if __name__ == "__main__":
     unittest.main()

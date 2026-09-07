@@ -6,7 +6,7 @@ from pathlib import Path
 from netbot.discovery.proposals import (
     ALREADY_ACCEPTED, CONFLICT, EXISTING_IDENTITY_REBIND_CANDIDATE,
     NEW_IDENTITY_CANDIDATE, RELATIONSHIP_CANDIDATE, generate_proposals,
-    resolve_observation_to_topology_identity,
+    resolve_observation_to_topology_identity, resolve_controller_topology_identity,
 )
 from netbot.discovery.acceptance import accept_proposal
 from netbot.state import State
@@ -114,6 +114,19 @@ class ProposalTests(unittest.TestCase):
     def test_source_correlation_requires_exact_explicit_context(self):
         self.assertIsNone(resolve_observation_to_topology_identity("arasaka", controller_id="other", topology_authority="arasaka"))
         self.assertIsNone(resolve_observation_to_topology_identity("controller-uuid", controller_id="controller-uuid", topology_authority=None))
+
+    def test_controller_resolves_through_exact_provider_self_binding(self):
+        accepted = [host("arasaka", "self-node")]
+        graph = {"nodes": [{"observed_from": "controller-uuid", "provider": "tailscale",
+                             "provider_node_id": "self-node", "metadata": {"_netbot_self": True}}]}
+        self.assertEqual(resolve_controller_topology_identity("controller-uuid", accepted, graph), "arasaka")
+
+    def test_controller_resolution_does_not_guess_without_exact_self_binding(self):
+        accepted = [host("arasaka", "self-node")]
+        graph = {"nodes": [{"observed_from": "controller-uuid", "provider": "tailscale",
+                             "provider_node_id": "other-node", "advertised_name": "arasaka",
+                             "metadata": {}}]}
+        self.assertIsNone(resolve_controller_topology_identity("controller-uuid", accepted, graph))
 
     def test_rebind_requires_multiple_continuity_facts(self):
         old = self.node("tailscale:old", "old", "old-name")

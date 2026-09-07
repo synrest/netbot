@@ -11,6 +11,7 @@ from typing import Any
 from .config import load_topology, load_topology_authority
 from .scheduler import status as scheduler_status
 from .version import __version__
+from .discovery.proposals import resolve_controller_topology_identity
 
 
 SCHEMA = "netbot.cli/v1"
@@ -64,6 +65,10 @@ def _db_data(db: Path) -> dict[str, Any]:
             FROM events ORDER BY (resolved_at IS NULL) DESC,
             CASE severity WHEN 'ERROR' THEN 0 WHEN 'ATTENTION' THEN 1 ELSE 2 END,
             last_seen_at DESC,event_id DESC LIMIT 10""")
+        conflicts = _many(connection, """SELECT event_id,event_type,severity,subject_identity,summary,
+            first_seen_at,last_seen_at,occurrence_count,resolved_at,stable_key
+            FROM events WHERE event_type='TOPOLOGY_CONFLICT' AND resolved_at IS NULL
+            ORDER BY last_seen_at DESC,event_id DESC""")
         nodes = []
         relationships = []
         if discovery:
@@ -76,7 +81,8 @@ def _db_data(db: Path) -> dict[str, Any]:
                 relationship["effective"] = _json(relationship.pop("effective_json", "{}"), {})
         return {"controller_id": controller["value"] if controller else None,
                 "discovery": discovery, "reconciliation": reconciliation,
-                "events": events, "nodes": nodes, "relationships": relationships}
+                "events": events, "conflicts": conflicts,
+                "nodes": nodes, "relationships": relationships}
     finally:
         if connection is not None:
             connection.close()
@@ -133,6 +139,8 @@ def _active_host(host):
 def _topology_data(config: Path, db: Path):
     version, hosts = load_topology(config)
     raw = _db_data(db)
+    resolved_controller = resolve_controller_topology_identity(
+        raw.get("controller_id"), hosts, {"nodes": raw.get("nodes", [])})
     accepted = []
     bound_ids = set()
     for host in sorted((host for host in hosts if _active_host(host)), key=lambda item: item.identity):
@@ -175,9 +183,11 @@ def _topology_data(config: Path, db: Path):
     observed.sort(key=lambda item: (item.get("advertised_name") or "", item.get("observation_identity") or ""))
     attention = [event for event in raw["events"] if event.get("resolved_at") is None and event.get("severity") in {"ERROR", "ATTENTION"}]
     return {"schema": SCHEMA, "command": "topology", "version": version,
-            "authority": load_topology_authority(config), "accepted": accepted,
+            "authority": load_topology_authority(config) or resolved_controller,
+            "controller_id": raw.get("controller_id"), "accepted": accepted,
             "observed": observed, "relationships": raw["relationships"],
-            "attention": attention, "provider": provider_info}
+            "attention": attention, "conflicts": raw.get("conflicts", []),
+            "provider": provider_info}
 
 
 def dashboard(config: Path, db: Path):
@@ -195,11 +205,14 @@ def dashboard(config: Path, db: Path):
         scheduler = {"installed": False, "enabled": False, "configured_interval": "unavailable"}
     active_attention = sum(event.get("resolved_at") is None and event.get("severity") in {"ERROR", "ATTENTION"}
                            for event in raw["events"])
-    data = {"schema": SCHEMA, "command": "dashboard", "controller": load_topology_authority(config) or raw["controller_id"],
+    data = {"schema": SCHEMA, "command": "dashboard", "controller": topology_data.get("authority") or raw["controller_id"],
             "controller_id": raw["controller_id"], "version": __version__,
             "topology": "OK" if accepted_nodes else "EMPTY", "nodes": len(accepted_nodes),
             "online": online, "offline": offline, "unknown": unknown, "observed": len(unaccepted),
             "attention": active_attention,
+            "last_reconcile": _age((raw["reconciliation"] or {}).get("completed_at")),
+            # Compatibility alias: this is still reconciliation time, not a
+            # separately persisted maintenance-cycle timestamp.
             "last_maintain": _age((raw["reconciliation"] or {}).get("completed_at")),
             "provider": _latest_provider_state(raw["discovery"]),
             "provider_detail": _provider_info(raw["discovery"]),
@@ -213,7 +226,7 @@ def status(config: Path, db: Path):
     data = dashboard(config, db)
     data["command"] = "status"
     data["database"] = "OK" if db.exists() else "not initialized"
-    data["last_maintain"] = _age((_db_data(db)["reconciliation"] or {}).get("completed_at"))
+    data["last_reconcile"] = _age((_db_data(db)["reconciliation"] or {}).get("completed_at"))
     return _envelope("status", data, "OK")
 
 
@@ -257,7 +270,7 @@ def render_dashboard(data):
             f"  Topology       {data['topology']}\n  Nodes          {data['nodes']}\n"
             f"  Online         {data['online']}\n  Offline        {data['offline']}\n"
             f"{unknown}  Observed       {data['observed']}\n  Attention      {data['attention']}\n\n"
-            f"  Last maintain  {data['last_maintain']}\n"
+            f"  Last reconcile {data.get('last_reconcile', data.get('last_maintain', 'never'))}\n"
             f"  Scheduler      {'● every ' + str(data['scheduler']['interval']) if data['scheduler'].get('enabled') else 'not installed'}\n\n"
             "  Run `netbot topology` to explore the network.\n")
 
@@ -271,7 +284,7 @@ def render_status(payload):
             f"Controller     {data.get('controller') or 'unavailable'}\nVersion        {data['version']}\n"
             f"Topology       {data['topology']}\nDatabase       {data['database']}\n"
             f"Provider       {data['provider']}\nScheduler      {sched}\n\n"
-            f"Last maintain  {data['last_maintain']}\nAttention      {data['attention']}\n")
+            f"Last reconcile {data.get('last_reconcile', data.get('last_maintain', 'never'))}\nAttention      {data['attention']}\n")
 
 
 def render_topology(data):
@@ -303,7 +316,7 @@ def render_topology(data):
     lines += ["", legend + "   ◇ observed   ! attention", "",
               f"  {len(accepted)} known · {counts['online']} online · {counts['offline']} offline"
               + (f" · {counts['unknown']} unknown" if counts["unknown"] else "")
-              + f" · {len(data['observed'])} observed · {len(data['attention'])} conflicts"]
+              + f" · {len(data['observed'])} observed · {len(data['attention'])} attention · {len(data.get('conflicts', []))} conflicts"]
     return "\n".join(lines) + "\n"
 
 
