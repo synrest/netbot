@@ -25,8 +25,11 @@ class DiscoveredPeer:
 class TailscaleProvider:
     name = "tailscale"
 
+    def __init__(self, executable=None):
+        self.executable = executable
+
     def observe(self) -> tuple[list[DiscoveredPeer], str | None]:
-        nodes, error = discover()
+        nodes, error = discover(self.executable)
         peers = [DiscoveredPeer(
             provider=self.name,
             provider_node_id=node.node_id,

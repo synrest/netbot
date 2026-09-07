@@ -1,7 +1,39 @@
-import json, subprocess
+import json
+import os
+import platform
+import shutil
+import subprocess
+from pathlib import Path
 from ..models import TailscaleNode
 
 TAILSCALED_SOCKET = "/var/run/tailscaled.socket"
+_MACOS_CANDIDATES = ("/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale")
+_LINUX_CANDIDATES = ("/usr/bin/tailscale", "/usr/local/bin/tailscale")
+
+
+def resolve_executable(executable: str | Path | None = None, *, platform_name=None):
+    """Resolve Tailscale without relying on an interactive scheduler PATH."""
+    if executable is not None:
+        path = Path(executable)
+        if not path.is_absolute():
+            raise ValueError("Tailscale executable must be an absolute path")
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+        return None
+
+    found = shutil.which("tailscale")
+    if found:
+        path = Path(found).resolve()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+
+    platform_name = platform_name or platform.system().lower()
+    candidates = _MACOS_CANDIDATES if platform_name == "darwin" else _LINUX_CANDIDATES if platform_name == "linux" else ()
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
 
 def _first(d, *keys):
     for k in keys:
@@ -33,11 +65,14 @@ def normalize_status(payload: dict) -> list[TailscaleNode]:
 def short_dns_name(name):
     return name.rstrip(".").split(".", 1)[0] if name else None
 
-def discover() -> tuple[list[TailscaleNode], str | None]:
+def discover(executable: str | Path | None = None, *, platform_name=None) -> tuple[list[TailscaleNode], str | None]:
     try:
-        result = subprocess.run(["tailscale", f"--socket={TAILSCALED_SOCKET}", "status", "--json"],
+        resolved = resolve_executable(executable, platform_name=platform_name)
+        if not resolved:
+            return [], "tailscale executable not found"
+        result = subprocess.run([resolved, f"--socket={TAILSCALED_SOCKET}", "status", "--json"],
                                 text=True, capture_output=True, check=True)
         return normalize_status(json.loads(result.stdout)), None
-    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         detail = (getattr(exc, "stderr", "") or str(exc)).strip()
         return [], detail
