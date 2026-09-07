@@ -29,14 +29,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("required: true", text)
         self.assertIn("RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.release_ref || github.ref_name }}", text)
         self.assertIn('ref: ${{ env.RELEASE_REF }}', text)
-        self.assertIn("Overlay portability fixtures for recovery validation", text)
-        self.assertIn("test_harness_sha=9869f1dfc88fd471d080990e222a64b256d52335", text)
-        self.assertIn('git fetch --no-tags origin "$test_harness_sha"', text)
-        self.assertIn('git rev-parse FETCH_HEAD^{commit}', text)
-        self.assertIn('git show "$test_harness_sha:tests/test_remote_ssh.py" > tests/test_remote_ssh.py', text)
-        self.assertIn('git show "$test_harness_sha:tests/test_sync.py" > tests/test_sync.py', text)
-        self.assertIn("git diff --quiet -- npm/netbot", text)
-        self.assertIn("git diff --quiet -- netbot", text)
+        self.assertNotIn("Overlay portability fixtures for recovery validation", text)
+        self.assertNotIn("test_harness_sha=9869f1dfc88fd471d080990e222a64b256d52335", text)
         self.assertIn('refs/tags/$RELEASE_REF^{}', text)
         self.assertIn('git rev-parse HEAD', text)
         self.assertIn('git describe --tags --exact-match "$RELEASE_SHA"', text)
@@ -56,8 +50,16 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"npm stage publish", text)), 1)
 
     def test_version_is_consistent(self):
-        self.assertEqual(__version__, "0.4.4")
+        self.assertEqual(__version__, "0.4.5")
         self.assertIn(__version__, (ROOT / "pyproject.toml").read_text())
+
+    def test_npm_package_has_trusted_publishing_repository_identity(self):
+        package = json.loads((ROOT / "npm/netbot/package.json").read_text())
+        self.assertEqual(package["name"], "@synrest/netbot")
+        self.assertEqual(package["repository"], {
+            "type": "git",
+            "url": "https://github.com/synrest/netbot",
+        })
 
     def test_installed_plist_has_no_source_checkout_dependency(self):
         with tempfile.TemporaryDirectory() as d:
@@ -98,8 +100,12 @@ class DeploymentTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as zf:
                 names = set(zf.namelist())
             prefix = f"netbot-{__version__}/"
+            with zipfile.ZipFile(archive) as zf:
+                packaged_topology = zf.read(prefix + "config/topology.yaml")
             self.assertIn(prefix + "install.sh", names)
-            self.assertIn(prefix + "config/topology.yaml", names)
+            self.assertEqual(packaged_topology, (ROOT / "config/topology.example.yaml").read_bytes())
+            self.assertNotIn(b"4582162682695456", packaged_topology)
+            self.assertNotIn(b"id_ed25519", packaged_topology)
             self.assertIn(prefix + "netbot/cli.py", names)
             self.assertIn(prefix + "systemd/netbot-watch.service", names)
             self.assertIn(prefix + "openrc/netbot-watch", names)

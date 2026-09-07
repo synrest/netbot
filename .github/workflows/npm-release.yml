@@ -47,17 +47,6 @@ jobs:
           ref: ${{ env.RELEASE_REF }}
           fetch-depth: 0
 
-      - name: Overlay portability fixtures for recovery validation
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          test_harness_sha=9869f1dfc88fd471d080990e222a64b256d52335
-          git fetch --no-tags origin "$test_harness_sha"
-          test "$(git rev-parse FETCH_HEAD^{commit})" = "$test_harness_sha"
-          git show "$test_harness_sha:tests/test_remote_ssh.py" > tests/test_remote_ssh.py
-          git show "$test_harness_sha:tests/test_sync.py" > tests/test_sync.py
-          test "$(git diff --name-only | sort)" = $'tests/test_remote_ssh.py\ntests/test_sync.py'
-          echo "recovery test harness commit: $test_harness_sha"
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -75,13 +64,7 @@ jobs:
           expected="${EXPECTED_VERSION#v}"
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           git describe --tags --exact-match "$RELEASE_SHA"
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            test "$(git diff --name-only | sort)" = $'tests/test_remote_ssh.py\ntests/test_sync.py'
-            git diff --quiet -- npm/netbot
-            git diff --quiet -- netbot
-          else
-            test -z "$(git status --porcelain)"
-          fi
+          test -z "$(git status --porcelain)"
           package_version=$(node -p "require('./package.json').version")
           release_version=$(node -p "require('./release.json').version")
           test "$package_version" = "$expected"

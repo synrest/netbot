@@ -1,7 +1,11 @@
 {
   "name": "@synrest/netbot",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Agentless topology discovery and SSH reconciliation for private networks.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synrest/netbot"
+  },
   "scripts": { "postinstall": "node lib/postinstall.js", "test": "node --test test/*.test.js" },
   "engines": { "node": ">=18" },
   "files": ["lib", "release.json"]
