@@ -298,6 +298,42 @@ class State:
             return None
         return dict(row) if row else None
 
+    def topology_decisions(self, decision_type=None):
+        try:
+            query = "SELECT * FROM topology_decisions"
+            args = ()
+            if decision_type:
+                query += " WHERE decision_type=?"
+                args = (decision_type,)
+            query += " ORDER BY decision_id"
+            return [dict(row) for row in self.db.execute(query, args)]
+        except sqlite3.OperationalError:
+            return []
+
+    def record_topology_decision(self, record):
+        self.db.execute("""CREATE TABLE IF NOT EXISTS topology_decisions(
+          decision_id INTEGER PRIMARY KEY, decision_type TEXT NOT NULL,
+          evidence_fingerprint TEXT NOT NULL, fingerprint_version TEXT NOT NULL,
+          proposal_type TEXT NOT NULL, proposal_id TEXT NOT NULL,
+          subject_reference TEXT NOT NULL, decided_at TEXT NOT NULL, reason TEXT,
+          UNIQUE(decision_type, evidence_fingerprint))""")
+        from datetime import datetime, timezone
+        decided_at = record.get("decided_at") or datetime.now(timezone.utc).isoformat()
+        cur = self.db.execute("""INSERT OR IGNORE INTO topology_decisions(
+          decision_type,evidence_fingerprint,fingerprint_version,proposal_type,
+          proposal_id,subject_reference,decided_at,reason)
+          VALUES (?,?,?,?,?,?,?,?)""", (record["decision_type"],
+          record["evidence_fingerprint"], record["fingerprint_version"],
+          record["proposal_type"], record["proposal_id"],
+          record["subject_reference"], decided_at, record.get("reason")))
+        if cur.rowcount and record.get("proposal_id"):
+            self.resolve_event("proposal:" + record["proposal_id"])
+        self.db.commit()
+        row = self.db.execute("""SELECT * FROM topology_decisions
+          WHERE decision_type=? AND evidence_fingerprint=?""",
+          (record["decision_type"], record["evidence_fingerprint"])).fetchone()
+        return dict(row) if row else None
+
     def record_event(self, event_type, severity, subject_identity, stable_key,
                      summary, details=None, occurred_at=None, *, condition=False):
         """Record one meaningful transition, coalescing an active condition."""

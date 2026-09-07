@@ -386,6 +386,20 @@ def render_accept(result):
     return f"Cannot accept {requested}.\n\n{reason}.\nRun `netbot events` to review current attention.\n"
 
 
+def render_reject(result):
+    requested = result.get("requested_node", "node")
+    if result.get("result") == "REJECTED":
+        return (f"✓ Rejected {requested}\n\n"
+                "  Evidence retained\n  Topology unchanged\n\n"
+                "Netbot will surface materially different identity evidence.\n")
+    if result.get("result") == "ALREADY_REJECTED":
+        return f"{requested} was already rejected for the current evidence.\n"
+    if result.get("result") == "ALREADY_ACCEPTED":
+        return f"Cannot reject {requested}.\n\nThe identity is already accepted in topology.\n"
+    reason = result.get("reason") or "the current observation cannot be rejected"
+    return f"Cannot reject {requested}.\n\n{reason}.\nRun `netbot events` to review current attention.\n"
+
+
 def render_maintain(result, verbose=False, config=None, db=None):
     if verbose:
         return json.dumps(result, indent=2, sort_keys=True) + "\n"

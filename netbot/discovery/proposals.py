@@ -14,6 +14,7 @@ EXISTING_IDENTITY_REBIND_CANDIDATE = "EXISTING_IDENTITY_REBIND_CANDIDATE"
 RELATIONSHIP_CANDIDATE = "RELATIONSHIP_CANDIDATE"
 CONFLICT = "CONFLICT"
 INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+REJECTION_FINGERPRINT_VERSION = "reject-v1"
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,33 @@ def _proposal(**values) -> Proposal:
                  "proposed_accepted_state")}
     values["proposal_id"] = _id(identity)
     return Proposal(**values)
+
+
+def rejection_fingerprint(proposal: dict[str, Any]) -> dict[str, str] | None:
+    """Build the stable identity basis for a human rejection decision."""
+    binding = proposal.get("provider_binding") or {}
+    provider = binding.get("provider")
+    provider_id = binding.get("provider_node_id")
+    if not provider or provider_id is None:
+        return None
+    basis = {"proposal_type": proposal.get("proposal_type"),
+             "provider": str(provider), "provider_node_id": str(provider_id)}
+    encoded = json.dumps(basis, sort_keys=True, separators=(",", ":")).encode()
+    return {"version": REJECTION_FINGERPRINT_VERSION,
+            "fingerprint": REJECTION_FINGERPRINT_VERSION + ":" + hashlib.sha256(encoded).hexdigest(),
+            "basis": basis}
+
+
+def filter_actionable_proposals(proposals: list[dict[str, Any]], decisions) -> list[dict[str, Any]]:
+    """Remove only explicitly rejected candidates from the actionable view."""
+    rejected = {row.get("evidence_fingerprint") if isinstance(row, dict) else row for row in decisions}
+    result = []
+    for proposal in proposals:
+        fingerprint = rejection_fingerprint(proposal)
+        if fingerprint and fingerprint["fingerprint"] in rejected:
+            continue
+        result.append(proposal)
+    return result
 
 
 def _bindings(host) -> dict[str, Any]:

@@ -9,7 +9,7 @@ from pathlib import Path
 from .config import load_topology, load_topology_authority
 from .controller_reconcile import reconcile_controller
 from .discovery.cycle import run_cycle
-from .discovery.proposals import generate_proposals
+from .discovery.proposals import filter_actionable_proposals, generate_proposals
 from .state import State
 from .events import record_maintenance_events
 
@@ -61,10 +61,11 @@ def run_maintenance(config_path: Path, db_path: Path, *, dry_run=False,
             _, hosts = load_topology(config_path)
             graph = discovery.get("crawl", state.discovery_graph())
             history = state.discovery_evidence()
-            proposals = generate_proposals(
+            raw_proposals = generate_proposals(
                 hosts, graph, history,
                 controller_id=discovery.get("controller_id") or state.controller_identity(create=False),
                 topology_authority=load_topology_authority(config_path))
+            proposals = filter_actionable_proposals(raw_proposals, state.topology_decisions("REJECT"))
         finally:
             state.close()
 

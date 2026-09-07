@@ -9,7 +9,8 @@ import tempfile
 from pathlib import Path
 
 from .proposals import (ALREADY_ACCEPTED, CONFLICT, NEW_IDENTITY_CANDIDATE,
-                        generate_proposals)
+                        filter_actionable_proposals, generate_proposals,
+                        rejection_fingerprint)
 from ..config import load_topology, load_topology_authority
 from ..state import State
 
@@ -75,7 +76,9 @@ def accept_proposal(config: Path, db: Path, proposal_id: str, *, dry_run=False) 
             _, hosts = load_topology(config)
             current_graph = state.discovery_graph()
             all_evidence = state.discovery_evidence()
-            proposals = generate_proposals(hosts, current_graph, all_evidence)
+            proposals = filter_actionable_proposals(
+                generate_proposals(hosts, current_graph, all_evidence),
+                state.topology_decisions("REJECT"))
             proposal = next((item for item in proposals if item["proposal_id"] == proposal_id), None)
             if proposal is None:
                 if state.discovery_acceptance(proposal_id):
@@ -158,10 +161,11 @@ def accept_node(config: Path, db: Path, node: str, *, dry_run=False) -> dict:
         _, hosts = load_topology(config)
         graph = state.discovery_graph()
         evidence = state.discovery_evidence()
-        proposals = generate_proposals(
+        proposals = filter_actionable_proposals(generate_proposals(
             hosts, graph, evidence,
             controller_id=state.controller_identity(create=False),
-            topology_authority=load_topology_authority(config))
+            topology_authority=load_topology_authority(config)),
+            state.topology_decisions("REJECT"))
     finally:
         state.close()
 
@@ -192,3 +196,88 @@ def accept_node(config: Path, db: Path, node: str, *, dry_run=False) -> dict:
     return {"schema": "netbot.cli/v1", "command": "accept", "requested_node": node,
             "result": result, "reason": reason, "topology_changed": False,
             "reconciliation_performed": False}
+
+
+def reject_proposal(config: Path, db: Path, proposal_id: str, *, reason=None) -> dict:
+    """Reject one currently actionable candidate without changing topology."""
+    lock_path = config.parent / ".netbot-topology.lock"
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = State(db)
+        try:
+            _, hosts = load_topology(config)
+            graph = state.discovery_graph()
+            raw = generate_proposals(hosts, graph, state.discovery_evidence())
+            fingerprint = next((rejection_fingerprint(item) for item in raw
+                                if item.get("proposal_id") == proposal_id), None)
+            decisions = state.topology_decisions("REJECT")
+            proposals = filter_actionable_proposals(raw, decisions)
+            proposal = next((item for item in proposals if item.get("proposal_id") == proposal_id), None)
+            base = {"proposal_id": proposal_id, "proposal_type":
+                    (proposal or {}).get("proposal_type"), "topology_changed": False,
+                    "reconciliation_performed": False}
+            if proposal is None:
+                if fingerprint and fingerprint["fingerprint"] in {row.get("evidence_fingerprint") for row in decisions}:
+                    base.update(result="ALREADY_REJECTED", rejection_fingerprint=fingerprint["fingerprint"],
+                                fingerprint_version=fingerprint["version"])
+                else:
+                    base.update(result="STALE_PROPOSAL")
+                return base
+            if proposal.get("proposal_type") != NEW_IDENTITY_CANDIDATE:
+                base.update(result="NON_ACTIONABLE", reason="only NEW_IDENTITY_CANDIDATE rejection is supported")
+                return base
+            if not fingerprint:
+                base.update(result="NON_ACTIONABLE", reason="proposal has no supported strong identity")
+                return base
+            decision = state.record_topology_decision({
+                "decision_type": "REJECT", "evidence_fingerprint": fingerprint["fingerprint"],
+                "fingerprint_version": fingerprint["version"],
+                "proposal_type": proposal["proposal_type"], "proposal_id": proposal_id,
+                "subject_reference": proposal.get("proposed_alias") or proposal.get("target_entity") or proposal_id,
+                "reason": reason})
+            return {**base, "result": "REJECTED", "proposal": proposal,
+                    "rejection_fingerprint": fingerprint["fingerprint"],
+                    "fingerprint_version": fingerprint["version"], "decision": decision,
+                    "audit_result": "RECORDED"}
+        finally:
+            state.close()
+
+
+def reject_node(config: Path, db: Path, node: str, *, reason=None) -> dict:
+    """Resolve one exact current actionable candidate for rejection."""
+    state = State(db)
+    try:
+        _, hosts = load_topology(config)
+        graph = state.discovery_graph()
+        raw = generate_proposals(hosts, graph, state.discovery_evidence(),
+                                 controller_id=state.controller_identity(create=False),
+                                 topology_authority=load_topology_authority(config))
+        decisions = state.topology_decisions("REJECT")
+        proposals = filter_actionable_proposals(raw, decisions)
+        raw_matching = [item for item in raw if node in _proposal_references(item, graph)]
+        matching = [item for item in proposals if node in _proposal_references(item, graph)]
+    finally:
+        state.close()
+    candidates = [item for item in matching if item.get("proposal_type") == NEW_IDENTITY_CANDIDATE]
+    base = {"schema": "netbot.cli/v1", "command": "reject", "requested_node": node,
+            "topology_changed": False, "reconciliation_performed": False}
+    if len(candidates) > 1:
+        return {**base, "result": "AMBIGUOUS", "reason": f"multiple current candidates match '{node}'"}
+    if len(candidates) == 1:
+        result = reject_proposal(config, db, candidates[0]["proposal_id"], reason=reason)
+        return {**result, **base, "resolved_proposal_id": candidates[0]["proposal_id"],
+                "canonical_identity": candidates[0].get("proposed_alias")}
+    rejected = {row.get("evidence_fingerprint") for row in decisions}
+    if any((fingerprint := rejection_fingerprint(item)) and
+           fingerprint["fingerprint"] in rejected for item in raw_matching):
+        return {**base, "result": "ALREADY_REJECTED",
+                "reason": "the current identity evidence was already rejected"}
+    if any(item.get("proposal_type") == CONFLICT for item in matching):
+        result, detail = "CONFLICT", "the current observation conflicts with accepted topology"
+    elif matching:
+        result, detail = "NON_ACTIONABLE", "the current proposal type cannot be rejected"
+    elif any(node == host.identity for host in hosts):
+        result, detail = "ALREADY_ACCEPTED", "the identity is already represented in accepted topology"
+    else:
+        result, detail = "NO_MATCH", f"no actionable observed machine named '{node}'"
+    return {**base, "result": result, "reason": detail}
