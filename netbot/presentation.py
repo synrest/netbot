@@ -400,6 +400,28 @@ def render_reject(result):
     return f"Cannot reject {requested}.\n\n{reason}.\nRun `netbot events` to review current attention.\n"
 
 
+def render_merge(result):
+    source, survivor = result.get("source", "source"), result.get("survivor", "survivor")
+    if result.get("result") == "SAFE":
+        return (f"NETBOT MERGE\n\n  Source       {source}\n  Survivor     {survivor}\n\n"
+                "  Identity     compatible\n  Provider     same provider identity\n"
+                "  Relationships unchanged\n  History      preserved\n\n"
+                "✓ Safe to merge\n\n"
+                f"  {source} → superseded by {survivor}\n")
+    if result.get("result") == "MERGED":
+        return (f"✓ Merged {source} into {survivor}\n\n  Survivor     {survivor}\n"
+                f"  Superseded   {source}\n  History      preserved\n\n"
+                "Run `netbot maintain --dry-run` to review resulting managed-state changes.\n")
+    if result.get("result") == "ALREADY_MERGED":
+        return f"{source} is already superseded by {survivor}.\n"
+    lines = ["NETBOT MERGE", "", f"  Source       {source}", f"  Survivor     {survivor}", "",
+             "✗ Merge blocked"]
+    for conflict in result.get("conflicts", []):
+        lines.append(f"  {conflict}")
+    lines += ["", "No changes made."]
+    return "\n".join(lines) + "\n"
+
+
 def render_maintain(result, verbose=False, config=None, db=None):
     if verbose:
         return json.dumps(result, indent=2, sort_keys=True) + "\n"

@@ -95,6 +95,8 @@ def _accepted(hosts: Iterable[Any]):
     by_provider: dict[tuple[str, str], list[str]] = {}
     by_identity = {}
     for host in hosts:
+        if host.attrs.get("lifecycle") == "retired" or host.attrs.get("superseded_by"):
+            continue
         by_identity[host.identity] = host
         tailscale = _bindings(host).get("tailscale", {})
         node_id = tailscale.get("node_id")

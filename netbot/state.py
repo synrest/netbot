@@ -334,6 +334,39 @@ class State:
           (record["decision_type"], record["evidence_fingerprint"])).fetchone()
         return dict(row) if row else None
 
+    def record_merge_pending(self, record):
+        self.db.execute("""CREATE TABLE IF NOT EXISTS topology_merges(
+          merge_id TEXT PRIMARY KEY, source TEXT NOT NULL, survivor TEXT NOT NULL,
+          decided_at TEXT NOT NULL, before_hash TEXT NOT NULL, after_hash TEXT NOT NULL,
+          evidence_json TEXT NOT NULL, state TEXT NOT NULL, actual_after_hash TEXT)""")
+        from datetime import datetime, timezone
+        self.db.execute("""INSERT OR IGNORE INTO topology_merges(
+          merge_id,source,survivor,decided_at,before_hash,after_hash,evidence_json,state)
+          VALUES (?,?,?,?,?,?,?,?)""", (record["merge_id"], record["source"], record["survivor"],
+          record.get("decided_at") or datetime.now(timezone.utc).isoformat(), record["before_hash"],
+          record["after_hash"], record["evidence_json"], "PENDING"))
+        self.db.commit()
+
+    def merge_operation(self, merge_id):
+        try:
+            row = self.db.execute("SELECT * FROM topology_merges WHERE merge_id=?", (merge_id,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return dict(row) if row else None
+
+    def pending_merge(self, source, survivor):
+        try:
+            row = self.db.execute("""SELECT * FROM topology_merges WHERE source=? AND survivor=?
+              AND state='PENDING' ORDER BY decided_at DESC LIMIT 1""", (source, survivor)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return dict(row) if row else None
+
+    def update_merge(self, merge_id, state, actual_after_hash):
+        self.db.execute("UPDATE topology_merges SET state=?,actual_after_hash=? WHERE merge_id=?",
+                        (state, actual_after_hash, merge_id))
+        self.db.commit()
+
     def record_event(self, event_type, severity, subject_identity, stable_key,
                      summary, details=None, occurred_at=None, *, condition=False):
         """Record one meaningful transition, coalescing an active condition."""
