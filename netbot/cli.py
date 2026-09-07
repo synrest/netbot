@@ -1,4 +1,4 @@
-import argparse, json, os, sys
+import argparse, json, os, shutil, sys
 from pathlib import Path
 from .config import load_topology, load_agent_settings
 from .config import load_topology_authority
@@ -42,6 +42,38 @@ from .presentation import (dashboard as dashboard_view, status as status_view,
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
+    command_help = {
+        "accept": ("usage: netbot accept <node> [options]\n\nAccept a discovered topology candidate.\n\n"
+                   "Arguments:\n  node        Exact proposed node name or identity\n\n"
+                   "Options:\n  --dry-run   Show the acceptance without changing topology\n  --json      Emit deterministic JSON"),
+        "reject": ("usage: netbot reject <node> [options]\n\nReject a discovered topology candidate.\n\n"
+                   "Arguments:\n  node        Exact current candidate name or identity\n\n"
+                   "Options:\n  --json      Emit deterministic JSON"),
+        "merge": ("usage: netbot merge <source> --into <survivor> [options]\n\nMerge a duplicate topology identity into its canonical identity.\n\n"
+                  "Arguments:\n  source      Exact accepted identity to retire\n  --into      Exact accepted identity to keep\n\n"
+                  "Options:\n  --dry-run   Show the merge without changing topology\n  --json      Emit deterministic JSON")}
+    if raw_argv == ["--help"]:
+        print("""usage: netbot <command> [options]
+
+Netbot — deterministic topology discovery and SSH reconciliation.
+
+Core commands:
+  status              Show operational status
+  topology            Show known topology
+  inspect <node>      Inspect one node
+  events              Show operator attention
+  accept <node>       Accept a topology candidate
+  reject <node>       Reject a topology candidate
+  merge ...           Merge duplicate identities
+  maintain            Run one maintenance cycle
+  doctor              Diagnose Netbot
+  scheduler           Manage scheduled maintenance
+
+Use 'netbot <command> --help' for details.""")
+        return
+    if len(raw_argv) == 2 and raw_argv[0] in command_help and raw_argv[1] == "--help":
+        print(command_help[raw_argv[0]])
+        return
     p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",nargs="?",choices=["version","doctor","status","topology","discover","discovery","diff","reconcile","maintain","cycle","sync","inspect","accept","reject","merge","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service","scheduler","events"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--target",dest="target_filter"); p.add_argument("--into",dest="merge_survivor"); p.add_argument("--type",dest="proposal_type"); p.add_argument("--node",dest="proposal_node"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--expected-sha256"); p.add_argument("--interval",default="30m"); p.add_argument("--executable",dest="executable"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--json",action="store_true",help="emit deterministic JSON"); p.add_argument("-v","--verbose",action="store_true",help="show detailed maintenance diagnostics"); p.add_argument("--authorize-existing-config",action="store_true",help="authorize one safe Include insertion into an existing SSH config"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.verbose and a.command != "maintain":
         p.error("-v/--verbose is only supported with netbot maintain")
@@ -357,7 +389,8 @@ def main(argv=None):
             print(json.dumps(result, indent=2, sort_keys=True))
             return
         payload = topology_view(a.config, a.db)
-        print(json.dumps(payload, indent=2, sort_keys=True) if a.json else render_topology(payload), end="")
+        print(json.dumps(payload, indent=2, sort_keys=True) if a.json else
+              render_topology(payload, shutil.get_terminal_size(fallback=(80, 24)).columns), end="")
         return
     if a.command=="bindings":
         _,hosts=load_topology(a.config); print(json.dumps([{"identity":h.identity,"binding":h.attrs.get("bindings",{}),"provenance":"explicit topology binding" if h.attrs.get("bindings") else "none"} for h in hosts],indent=2)); return

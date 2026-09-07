@@ -159,7 +159,7 @@ def _topology_data(config: Path, db: Path):
         host["state"] = ("online" if match and provider_usable and match.get("online") in (True, "True")
                           else "offline" if match and provider_usable and match.get("online") in (False, "False")
                           else "unknown")
-    observed = []
+    observed_by_key = {}
     for node in raw["nodes"]:
         if node.get("evidence_key") == raw.get("controller_id") or node.get("observed_from") == raw.get("controller_id") and not node.get("provider_node_id"):
             continue
@@ -173,14 +173,16 @@ def _topology_data(config: Path, db: Path):
                 continue
             if (provider, str(node_id)) in bound_ids:
                 continue
-            observed.append({"observation_identity": node.get("evidence_key") or f"{provider}:{node_id}",
-                             "provider": provider, "provider_node_id": node_id,
-                             "advertised_name": candidate.get("advertised_name"),
-                             "addresses": candidate.get("addresses", []),
-                             "online": candidate.get("online"),
-                             "observed_from": node.get("observed_from"),
-                             "observed_at": candidate.get("observed_at") or node.get("observed_at")})
-    observed.sort(key=lambda item: (item.get("advertised_name") or "", item.get("observation_identity") or ""))
+            item = {"observation_identity": node.get("evidence_key") or f"{provider}:{node_id}",
+                    "provider": provider, "provider_node_id": node_id,
+                    "advertised_name": candidate.get("advertised_name"),
+                    "addresses": candidate.get("addresses", []),
+                    "online": candidate.get("online"),
+                    "observed_from": node.get("observed_from"),
+                    "observed_at": candidate.get("observed_at") or node.get("observed_at")}
+            observed_by_key.setdefault((provider, str(node_id)), item)
+    observed = sorted(observed_by_key.values(),
+                      key=lambda item: (item.get("advertised_name") or "", item.get("observation_identity") or ""))
     attention = [event for event in raw["events"] if event.get("resolved_at") is None and event.get("severity") in {"ERROR", "ATTENTION"}]
     return {"schema": SCHEMA, "command": "topology", "version": version,
             "authority": load_topology_authority(config) or resolved_controller,
@@ -287,37 +289,80 @@ def render_status(payload):
             f"Last reconcile {data.get('last_reconcile', data.get('last_maintain', 'never'))}\nAttention      {data['attention']}\n")
 
 
-def render_topology(data):
+def _topology_counts(data, accepted):
+    return {state: sum(host.get("state") == state for host in accepted)
+            for state in ("online", "offline", "unknown")}
+
+
+def _contact_text(item, *, observed=False):
+    name = str(item.get("identity") or item.get("advertised_name") or
+               item.get("observation_identity") or "unknown")
+    state = (item.get("state") if not observed else
+             "online" if item.get("online") in (True, "True") else
+             "offline" if item.get("online") in (False, "False") else "unknown")
+    return (("◇ " if observed else "") + _symbol(state) + " " + name.upper(), state)
+
+
+def _boxed(title, body, width):
+    inner = width - 2
+    heading = f" {title} "
+    top = "┌─" + heading + "─" * max(0, inner - len(heading) - 1) + "┐"
+    rows = ["│ " + line[:inner - 2].ljust(inner - 2) + " │" for line in body]
+    return [top, *rows, "└" + "─" * inner + "┘"]
+
+
+def _render_topology_wide(data, width=80):
     accepted = data["accepted"]
     authority = data.get("authority")
-    lines = ["NETBOT TOPOLOGY", ""]
-    if not accepted and not data["observed"]:
-        lines.append("  No accepted or observed nodes.")
-    else:
-        peers = [host for host in accepted if host["identity"] != authority]
-        if authority:
-            lines += [f"{authority.upper():^60}", f"{'● controller':^60}", f"{'│':^60}"]
-        for offset in range(0, len(peers), 3):
-            group = peers[offset:offset + 3]
-            width, gap = 16, 3
-            start = max(0, (60 - (width * len(group) + gap * (len(group) - 1))) // 2)
-            lines.append(" " * start + "   ".join(host["identity"].upper().center(width) for host in group))
-            lines.append(" " * start + "   ".join(((_symbol(host.get("state")) + " " + host.get("state", "unknown")).center(width)) for host in group))
-        if data["observed"]:
-            lines += ["", "Observed"]
-            for node in data["observed"]:
-                name = node.get("advertised_name") or node.get("observation_identity") or "unknown"
-                state = "online" if node.get("online") in (True, "True") else "offline" if node.get("online") in (False, "False") else "observed"
-                lines.append(f"  ◇ {name}  {state}")
-    counts = {state: sum(host.get("state") == state for host in accepted) for state in ("online", "offline", "unknown")}
-    legend = "  ● online   ○ offline"
-    if counts["unknown"]:
-        legend += "   · unknown"
-    lines += ["", legend + "   ◇ observed   ! attention", "",
-              f"  {len(accepted)} known · {counts['online']} online · {counts['offline']} offline"
-              + (f" · {counts['unknown']} unknown" if counts["unknown"] else "")
-              + f" · {len(data['observed'])} observed · {len(data['attention'])} attention · {len(data.get('conflicts', []))} conflicts"]
+    peers = [host for host in accepted if host["identity"] != authority]
+    box_width = min(width, 80)
+    inner = box_width - 2
+    right = f" CONTROLLER · {str(authority or 'UNAVAILABLE').upper()}"
+    title = "NETBOT / TOPOLOGY"
+    header = ["╔" + "═" * inner + "╗",
+              "║ " + title + " " * max(1, inner - len(title) - len(right) - 2) + right + " ║",
+              "╚" + "═" * inner + "╝", ""]
+    local = [f"{'┌─ LOCAL NODE ─┐':^{inner}}",
+             f"{'│  ● ' + str(authority or 'unavailable').upper() + '   │':^{inner}}",
+             f"{'│  CONTROLLER  │':^{inner}}",
+             f"{'└──────────────┘':^{inner}}", ""]
+    cells = [_contact_text(host)[0] for host in peers]
+    cell_width = 22
+    columns = 3 if cells and len(cells) >= 3 and max(map(len, cells)) <= cell_width - 2 else 1
+    contact_body = []
+    for offset in range(0, len(cells), columns):
+        row = cells[offset:offset + columns]
+        contact_body.append("   ".join(value.ljust(cell_width) for value in row).rstrip())
+    accepted_box = _boxed("ACCEPTED CONTACTS", contact_body or ["  No accepted peers."], box_width)
+    observed_body = [f"  {_contact_text(node, observed=True)[0]}" for node in data["observed"]]
+    observed_box = _boxed("OBSERVED", observed_body or ["  None."], box_width)
+    counts = _topology_counts(data, accepted)
+    summary = ["● online   ○ offline   · unknown   ◇ observed   ! attention", "",
+               f"{len(accepted)} known · {counts['online']} online · {counts['offline']} offline · {counts['unknown']} unknown · {len(data['observed'])} observed",
+               f"{len(data['attention'])} attention · {len(data.get('conflicts', []))} conflicts"]
+    return "\n".join(header + local + accepted_box + [""] + observed_box + ["", *summary]) + "\n"
+
+
+def _render_topology_linear(data):
+    accepted = data["accepted"]
+    authority = data.get("authority")
+    peers = [host for host in accepted if host["identity"] != authority]
+    lines = ["NETBOT TOPOLOGY", f"Controller: ● {str(authority or 'unavailable').upper()}", "", "ACCEPTED"]
+    lines += [f"{_symbol(host.get('state'))} {host['identity'].upper()}" for host in peers]
+    lines += ["", "OBSERVED"]
+    lines += [f"{_contact_text(node, observed=True)[0]}"
+              for node in data["observed"]]
+    counts = _topology_counts(data, accepted)
+    lines += ["", "● online   ○ offline   · unknown   ◇ observed   ! attention", "",
+              f"{len(accepted)} known · {counts['online']} online · {counts['offline']} offline · {counts['unknown']} unknown · {len(data['observed'])} observed",
+              f"{len(data['attention'])} attention · {len(data.get('conflicts', []))} conflicts"]
     return "\n".join(lines) + "\n"
+
+
+def render_topology(data, width=80):
+    """Render a flat accepted/observed contact view, never an implied graph."""
+    width = width if isinstance(width, int) and width > 0 else 80
+    return _render_topology_wide(data, width) if width >= 80 else _render_topology_linear(data)
 
 
 def render_inspect(data):

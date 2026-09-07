@@ -56,6 +56,12 @@ class PresentationTests(unittest.TestCase):
             main([*args, "--config", str(self.config), "--db", str(self.db)])
         return output.getvalue()
 
+    def invoke_help(self, *args):
+        output = StringIO()
+        with redirect_stdout(output):
+            main(list(args))
+        return output.getvalue()
+
     def test_dashboard_and_status_are_read_only(self):
         with patch("netbot.cli.scheduler_status", return_value={"installed": False, "enabled": False, "configured_interval": "30m"}):
             dashboard_output = self.invoke()
@@ -86,7 +92,7 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual([item["identity"] for item in view["accepted"]], ["arasaka", "orion"])
         self.assertEqual(view["observed"][0]["advertised_name"], "new-host")
         rendered = self.invoke("topology")
-        self.assertIn("◇ new-host", rendered)
+        self.assertIn("◇ ● NEW-HOST", rendered)
 
     def test_topology_does_not_render_ssh_evidence_as_hierarchy(self):
         state = State(self.db)
@@ -100,7 +106,7 @@ class PresentationTests(unittest.TestCase):
 
     def test_topology_flat_peer_rows_have_no_false_vertical_relationships(self):
         rendered = self.invoke("topology")
-        self.assertEqual(rendered.count("│"), 1)
+        self.assertNotIn("\n│\n", rendered)
         self.assertNotIn("┼", rendered)
 
     def test_topology_filters_retired_and_superseded_hosts(self):
@@ -168,6 +174,56 @@ class PresentationTests(unittest.TestCase):
         state.commit_events(); state.close()
         rendered = render_topology(topology(self.config, self.db))
         self.assertIn("1 attention · 0 conflicts", rendered)
+
+    def test_command_deck_wide_mode_is_flat_and_semantic(self):
+        data = {"authority": "arasaka", "accepted": [
+            {"identity": "arasaka", "state": "online"},
+            {"identity": "orion", "state": "online"},
+            {"identity": "kiroshi", "state": "offline"},
+            {"identity": "mikoshi", "state": "offline"},
+            {"identity": "orthanc-postgres", "state": "unknown"}],
+            "observed": [{"advertised_name": "orthanc-db", "online": False}],
+            "attention": [{"event_id": 1}], "conflicts": []}
+        output = render_topology(data, 80)
+        self.assertIn("CONTROLLER · ARASAKA", output)
+        self.assertIn("ACCEPTED CONTACTS", output)
+        self.assertIn("OBSERVED", output)
+        self.assertIn("◇ ○ ORTHANC-DB", output)
+        self.assertNotIn("→", output)
+        self.assertNotIn("┼", "\n".join(line for line in output.splitlines() if "ORION" in line))
+        self.assertIn("1 attention · 0 conflicts", output)
+        lines = output.splitlines()
+        self.assertEqual(len({len(lines[index]) for index in (0, 1, 2)}), 1)
+        self.assertTrue(all(len(line) <= 80 for line in lines))
+        self.assertEqual(len(lines[0]), len(lines[2]))
+
+    def test_topology_width_modes_are_deterministic(self):
+        data = {"authority": "arasaka", "accepted": [
+            {"identity": "arasaka", "state": "online"},
+            {"identity": "a-very-long-canonical-identity", "state": "unknown"}],
+            "observed": [{"advertised_name": "contact", "online": None}],
+            "attention": [], "conflicts": []}
+        compact = render_topology(data, 70)
+        linear = render_topology(data, 50)
+        self.assertNotIn("╔", compact)
+        self.assertNotIn("╔", linear)
+        self.assertIn("ACCEPTED", compact)
+        self.assertIn("Controller: ● ARASAKA", linear)
+        self.assertIn("· A-VERY-LONG-CANONICAL-IDENTITY", linear)
+        self.assertIn("◇ · CONTACT", linear)
+
+    def test_command_help_is_concise_for_core_commands(self):
+        for command, expected in (("accept", "Accept a discovered topology candidate."),
+                                  ("reject", "Reject a discovered topology candidate."),
+                                  ("merge", "Merge a duplicate topology identity")):
+            output = self.invoke_help(command, "--help")
+            self.assertIn(expected, output)
+            self.assertNotIn("[{version,doctor,status", output)
+        top = self.invoke_help("--help")
+        self.assertIn("Core commands:", top)
+        self.assertIn("accept <node>", top)
+        self.assertIn("reject <node>", top)
+        self.assertIn("merge ...", top)
 
     def test_reconciliation_timestamp_is_labeled_accurately(self):
         state = State(self.db)
