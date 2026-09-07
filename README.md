@@ -86,6 +86,10 @@ Inspect operator events:
 netbot events
 ```
 
+Public views also support deterministic machine output with `--json`. Use
+`netbot maintain -v` or `netbot maintain --verbose` for detailed human
+diagnostics; `--json` and verbose mode are mutually exclusive.
+
 Run one maintenance cycle:
 
 ```sh

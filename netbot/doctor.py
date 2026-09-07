@@ -50,10 +50,14 @@ def diagnose() -> dict:
                    check("runtime", runtime.exists() and os.access(runtime, os.R_OK | os.W_OK), str(runtime)),
                    check("logs", logs.exists() and os.access(logs, os.R_OK | os.W_OK), str(logs))])
     if backend in {"launchd", "systemd", "openrc"}:
-        service = service_status()
+        try:
+            service = service_status()
+        except (OSError, subprocess.SubprocessError) as exc:
+            service = {"loaded": False, "watcher": False,
+                       "running": False, "error": str(exc)}
         checks.append(check("supervisor", True, backend))
         checks.append(check("watcher-service", service.get("loaded", False) and service.get("watcher", False),
-                            f"backend={backend} loaded={service.get('loaded')} running={service.get('running')} pid={service.get('pid')}",
+                            service.get("error") or f"backend={backend} loaded={service.get('loaded')} running={service.get('running')} pid={service.get('pid')}",
                             warning=backend == "openrc" and not service.get("installed", False)))
     else:
         checks.append(check("supervisor", False, "unsupported supervisor"))
