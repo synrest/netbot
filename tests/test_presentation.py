@@ -334,7 +334,7 @@ class PresentationTests(unittest.TestCase):
                 self.invoke("maintain", "--json", "--verbose")
 
     def test_doctor_human_and_json(self):
-        payload = {"version": "0.4.3", "checks": [{"name": "python", "status": "OK", "detail": "3.14"}]}
+        payload = {"version": "0.4.4", "checks": [{"name": "python", "status": "OK", "detail": "3.14"}]}
         with patch("netbot.cli.diagnose", return_value=payload):
             self.assertIn("NETBOT DOCTOR", self.invoke("doctor"))
             self.assertEqual(json.loads(self.invoke("doctor", "--json"))["checks"], payload["checks"])

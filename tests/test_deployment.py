@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 import zipfile
+import re
 from pathlib import Path
 from unittest import mock
 
@@ -17,8 +18,27 @@ ROOT = Path(__file__).parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_npm_workflow_is_oidc_stage_only(self):
+        workflow = ROOT / ".github/workflows/npm-release.yml"
+        text = workflow.read_text()
+        self.assertIn("id-token: write", text)
+        self.assertIn("contents: read", text)
+        self.assertIn("npm stage publish", text)
+        self.assertIn('npm stage publish "./$PACKAGE_TGZ"', text)
+        self.assertIn('echo "PACKAGE_TGZ=$package_tgz" >> "$GITHUB_ENV"', text)
+        self.assertNotIn("package-manager-cache", text)
+        self.assertNotRegex(text, r"(?m)^\s*(?:-\s*)?run:\s*npm publish(?:\s|$)")
+        self.assertNotIn("npm stage approve", text)
+        self.assertNotIn("NPM_TOKEN", text)
+        self.assertNotIn("NODE_AUTH_TOKEN", text)
+        self.assertNotRegex(text, r"(?i)bypass[-_ ]?2fa|automation token|publish-capable")
+        self.assertNotIn("write-all", text)
+        self.assertNotIn("contents: write", text)
+        self.assertNotIn("packages: write", text)
+        self.assertEqual(len(re.findall(r"npm stage publish", text)), 1)
+
     def test_version_is_consistent(self):
-        self.assertEqual(__version__, "0.4.3")
+        self.assertEqual(__version__, "0.4.4")
         self.assertIn(__version__, (ROOT / "pyproject.toml").read_text())
 
     def test_installed_plist_has_no_source_checkout_dependency(self):

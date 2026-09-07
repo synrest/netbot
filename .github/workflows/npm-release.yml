@@ -1,0 +1,65 @@
+name: Stage npm release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  stage:
+    name: Validate and stage npm package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          registry-url: https://registry.npmjs.org
+
+      - name: Use staged-publishing capable npm
+        run: npm install --global npm@11.19.1
+
+      - name: Verify release identity
+        working-directory: npm/netbot
+        env:
+          EXPECTED_VERSION: ${{ github.ref_name }}
+        run: |
+          expected="${EXPECTED_VERSION#v}"
+          package_version=$(node -p "require('./package.json').version")
+          release_version=$(node -p "require('./release.json').version")
+          test "$package_version" = "$expected"
+          test "$release_version" = "$expected"
+          test "$(node -p "require('./package.json').name")" = "@synrest/netbot"
+
+      - name: Run package tests
+        working-directory: npm/netbot
+        run: npm test
+
+      - name: Run Netbot validation
+        run: |
+          python3 -m unittest discover -s tests -p 'test*.py' -q
+          python3 -m compileall -q netbot tests
+
+      - name: Pack and inspect npm artifact
+        working-directory: npm/netbot
+        run: |
+          package_tgz=$(npm pack --json | node -e 'let s=""; process.stdin.on("data", d => s += d).on("end", () => process.stdout.write(JSON.parse(s)[0].filename))')
+          test -n "$package_tgz"
+          echo "PACKAGE_TGZ=$package_tgz" >> "$GITHUB_ENV"
+          tar -tzf "$package_tgz" | grep -F 'package/package.json'
+          tar -tzf "$package_tgz" | grep -F 'package/lib/postinstall.js'
+          ! tar -tzf "$package_tgz" | grep -E '(^|/)(\.git|state|config|generated|\.npmrc)(/|$)'
+          sha256sum "$package_tgz"
+
+      - name: Stage package for human approval
+        working-directory: npm/netbot
+        run: npm stage publish "./$PACKAGE_TGZ"

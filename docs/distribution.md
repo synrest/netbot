@@ -13,9 +13,9 @@ specific release, use its published `bootstrap.sh`, ZIP asset, and SHA-256
 value:
 
 ```sh
-curl -fsSL https://github.com/synrest/netbot/releases/download/v0.4.3/bootstrap.sh \
-  | sh -s -- 0.4.3 \
-      https://github.com/synrest/netbot/releases/download/v0.4.3/netbot-0.4.3.zip \
+curl -fsSL https://github.com/synrest/netbot/releases/download/v0.4.4/bootstrap.sh \
+  | sh -s -- 0.4.4 \
+      https://github.com/synrest/netbot/releases/download/v0.4.4/netbot-0.4.4.zip \
       <SHA256-from-the-release>
 ```
 
