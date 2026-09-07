@@ -3,6 +3,7 @@ import unittest
 import json
 import os
 import plistlib
+import sys
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -103,6 +104,7 @@ class SyncTests(unittest.TestCase):
         self.assertNotIn("PathState", plist)
 
     @mock.patch.object(service, "launchctl")
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS launchd")
     def test_service_lifecycle_uses_user_launchd_domain(self, launchctl):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"NETBOT_PREFIX": d}):
             launchctl.return_value = mock.Mock(returncode=0, stdout="", stderr="")
@@ -112,6 +114,7 @@ class SyncTests(unittest.TestCase):
             launchctl.assert_called_with("bootout", f"{service.domain()}/{service.LABEL}")
 
     @mock.patch.object(service, "launchctl")
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS launchd")
     def test_service_restart_boots_out_then_bootstraps(self, launchctl):
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"NETBOT_PREFIX": d}):
             launchctl.return_value = mock.Mock(returncode=0, stdout="", stderr="")

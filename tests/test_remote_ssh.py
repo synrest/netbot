@@ -1,4 +1,5 @@
 import subprocess
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -141,7 +142,7 @@ hosts:
             )
             self.assertEqual(result.stdout, "EXACT 0\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n")
 
-    def test_empty_canonical_include_preserves_parent_human_provenance_in_zsh(self):
+    def test_empty_canonical_include_preserves_parent_human_provenance_in_posix_shell(self):
         with tempfile.TemporaryDirectory() as d:
             home = Path(d)
             (home / ".ssh" / "config.d").mkdir(parents=True)
@@ -149,7 +150,7 @@ hosts:
                 "Include ~/.ssh/config.d/*\nHost oracle\n    User rafael\n"
             )
             result = subprocess.run(
-                ["/bin/zsh", "-c", _provenance_command("oracle")],
+                [shutil.which("sh") or "/bin/sh", "-c", _provenance_command("oracle")],
                 env={"HOME": str(home)}, text=True, capture_output=True, check=True,
             )
             self.assertEqual(result.stdout, "EXACT 1\nWILDCARD 0\nINCLUDE 0\nINVALID 0\n")
