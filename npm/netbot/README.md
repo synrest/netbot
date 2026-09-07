@@ -65,9 +65,9 @@ bootstrap script, that release's `netbot-<version>.zip`, and the SHA-256 value
 published with that release:
 
 ```sh
-curl -fsSL https://github.com/synrest/netbot/releases/download/v0.4.2/bootstrap.sh \
-  | sh -s -- 0.4.2 \
-      https://github.com/synrest/netbot/releases/download/v0.4.2/netbot-0.4.2.zip \
+curl -fsSL https://github.com/synrest/netbot/releases/download/v0.4.3/bootstrap.sh \
+  | sh -s -- 0.4.3 \
+      https://github.com/synrest/netbot/releases/download/v0.4.3/netbot-0.4.3.zip \
       <SHA256-from-the-release>
 ```
 
