@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Exact immutable release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,11 +19,33 @@ jobs:
   stage:
     name: Validate and stage npm package
     runs-on: ubuntu-latest
+    env:
+      RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.release_ref || github.ref_name }}
     steps:
-      - name: Check out tagged release
+      - name: Validate and resolve release tag
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          if ! printf '%s\n' "$RELEASE_REF" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "release_ref must be a semantic version tag" >&2
+            exit 1
+          fi
+          release_sha=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" \
+            "refs/tags/$RELEASE_REF^{}" | awk 'NR == 1 {print $1}')
+          if [ -z "$release_sha" ]; then
+            release_sha=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" \
+              "refs/tags/$RELEASE_REF" | awk 'NR == 1 {print $1}')
+          fi
+          test -n "$release_sha"
+          echo "RELEASE_SHA=$release_sha" >> "$GITHUB_ENV"
+          echo "requested release ref: $RELEASE_REF"
+          echo "resolved release SHA: $release_sha"
+
+      - name: Check out immutable release source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -31,14 +59,22 @@ jobs:
       - name: Verify release identity
         working-directory: npm/netbot
         env:
-          EXPECTED_VERSION: ${{ github.ref_name }}
+          EXPECTED_VERSION: ${{ env.RELEASE_REF }}
         run: |
           expected="${EXPECTED_VERSION#v}"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git describe --tags --exact-match "$RELEASE_SHA"
           package_version=$(node -p "require('./package.json').version")
           release_version=$(node -p "require('./release.json').version")
           test "$package_version" = "$expected"
           test "$release_version" = "$expected"
           test "$(node -p "require('./package.json').name")" = "@synrest/netbot"
+          echo "checked-out git SHA: $(git rev-parse HEAD)"
+          echo "package name: $(node -p "require('./package.json').name")"
+          echo "package version: $package_version"
+          echo "release.json version: $release_version"
+          echo "Node version: $(node --version)"
+          echo "npm version: $(npm --version)"
 
       - name: Run package tests
         working-directory: npm/netbot
@@ -58,8 +94,22 @@ jobs:
           tar -tzf "$package_tgz" | grep -F 'package/package.json'
           tar -tzf "$package_tgz" | grep -F 'package/lib/postinstall.js'
           ! tar -tzf "$package_tgz" | grep -E '(^|/)(\.git|state|config|generated|\.npmrc)(/|$)'
-          sha256sum "$package_tgz"
+          package_sha=$(sha256sum "$package_tgz" | awk '{print $1}')
+          echo "PACKAGE_SHA256=$package_sha" >> "$GITHUB_ENV"
+          echo "packed TGZ name: $package_tgz"
+          echo "packed TGZ SHA-256: $package_sha"
 
       - name: Stage package for human approval
         working-directory: npm/netbot
-        run: npm stage publish "./$PACKAGE_TGZ"
+        run: |
+          echo "requested release ref: $RELEASE_REF"
+          echo "resolved git SHA: $RELEASE_SHA"
+          echo "checked-out git SHA: $(git rev-parse HEAD)"
+          echo "package name: $(node -p "require('./package.json').name")"
+          echo "package version: $(node -p "require('./package.json').version")"
+          echo "release.json version: $(node -p "require('./release.json').version")"
+          echo "Node version: $(node --version)"
+          echo "npm version: $(npm --version)"
+          echo "packed TGZ name: $PACKAGE_TGZ"
+          echo "packed TGZ SHA-256: $PACKAGE_SHA256"
+          npm stage publish "./$PACKAGE_TGZ"
