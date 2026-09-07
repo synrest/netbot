@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .proposals import (ALREADY_ACCEPTED, CONFLICT, NEW_IDENTITY_CANDIDATE,
                         generate_proposals)
-from ..config import load_topology
+from ..config import load_topology, load_topology_authority
 from ..state import State
 
 
@@ -134,3 +134,61 @@ def accept_proposal(config: Path, db: Path, proposal_id: str, *, dry_run=False) 
             return base
         finally:
             state.close()
+
+
+def _proposal_references(proposal: dict, graph: dict) -> set[str]:
+    """Return exact human references exposed by one current proposal."""
+    references = {value for value in (proposal.get("proposed_alias"),
+                                      proposal.get("target_entity"),
+                                      proposal.get("candidate_identity")) if value}
+    target = proposal.get("target_entity")
+    for node in graph.get("nodes", []):
+        if node.get("evidence_key") != target:
+            continue
+        for value in (node.get("advertised_name"), node.get("provider_node_id")):
+            if value:
+                references.add(str(value))
+    return references
+
+
+def accept_node(config: Path, db: Path, node: str, *, dry_run=False) -> dict:
+    """Resolve one exact human node reference, then use accept_proposal."""
+    state = State(db)
+    try:
+        _, hosts = load_topology(config)
+        graph = state.discovery_graph()
+        evidence = state.discovery_evidence()
+        proposals = generate_proposals(
+            hosts, graph, evidence,
+            controller_id=state.controller_identity(create=False),
+            topology_authority=load_topology_authority(config))
+    finally:
+        state.close()
+
+    matching = [item for item in proposals if node in _proposal_references(item, graph)]
+    candidates = [item for item in matching if item["proposal_type"] == NEW_IDENTITY_CANDIDATE]
+    if len(candidates) > 1:
+        return {"schema": "netbot.cli/v1", "command": "accept", "requested_node": node,
+                "result": "AMBIGUOUS", "reason": f"multiple current candidates match '{node}'",
+                "topology_changed": False, "reconciliation_performed": False}
+    if len(candidates) == 1:
+        result = accept_proposal(config, db, candidates[0]["proposal_id"], dry_run=dry_run)
+        result.update({"schema": "netbot.cli/v1", "command": "accept", "requested_node": node,
+                       "resolved_proposal_id": candidates[0]["proposal_id"],
+                       "canonical_identity": candidates[0].get("proposed_alias")})
+        return result
+    if any(item["proposal_type"] == CONFLICT for item in matching):
+        result, reason = "CONFLICT", "the current observation conflicts with accepted topology"
+    elif any(item["proposal_type"] != ALREADY_ACCEPTED for item in matching):
+        result, reason = "NON_ACTIONABLE", "the current proposal type cannot be accepted"
+    elif matching:
+        result, reason = "ALREADY_ACCEPTED", "the identity is already represented in accepted topology"
+    elif any(node == host.identity or node in {
+             alias for alias in host.attrs.get("bindings", {}).get("ssh", {}).get("aliases", [])
+             } for host in hosts):
+        result, reason = "ALREADY_ACCEPTED", "the identity is already represented in accepted topology"
+    else:
+        result, reason = "NO_MATCH", f"no actionable observed machine named '{node}'"
+    return {"schema": "netbot.cli/v1", "command": "accept", "requested_node": node,
+            "result": result, "reason": reason, "topology_changed": False,
+            "reconciliation_performed": False}

@@ -367,6 +367,25 @@ def render_events(payload):
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_accept(result):
+    requested = result.get("requested_node", "node")
+    outcome = result.get("result")
+    if outcome in {"ACCEPTED", "WOULD_ACCEPT"}:
+        identity = result.get("canonical_identity") or requested
+        provider = ((result.get("proposal") or {}).get("provider_binding") or {}).get("provider")
+        lines = [f"✓ {'Accepted' if outcome == 'ACCEPTED' else 'Would accept'} {identity}", "",
+                 "  State       ACCEPTED"]
+        if provider:
+            lines.append(f"  Provider    {str(provider).title()}")
+        if outcome == "ACCEPTED":
+            lines += ["", "Run `netbot maintain --dry-run` to review changes."]
+        return "\n".join(lines) + "\n"
+    if outcome == "ALREADY_ACCEPTED":
+        return f"{requested} is already represented in accepted topology.\n"
+    reason = result.get("reason") or "the current observation cannot be accepted"
+    return f"Cannot accept {requested}.\n\n{reason}.\nRun `netbot events` to review current attention.\n"
+
+
 def render_maintain(result, verbose=False, config=None, db=None):
     if verbose:
         return json.dumps(result, indent=2, sort_keys=True) + "\n"

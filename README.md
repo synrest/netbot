@@ -86,6 +86,15 @@ Inspect operator events:
 netbot events
 ```
 
+After reviewing one current observed candidate, accept it explicitly:
+
+```sh
+netbot accept <node>
+```
+
+Acceptance changes accepted topology only; it does not automatically reconcile
+SSH state.
+
 Public views also support deterministic machine output with `--json`. Use
 `netbot maintain -v` or `netbot maintain --verbose` for detailed human
 diagnostics; `--json` and verbose mode are mutually exclusive.

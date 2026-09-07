@@ -9,6 +9,7 @@ from unittest.mock import patch
 from netbot.cli import main
 from netbot.presentation import dashboard, topology, render_dashboard
 from netbot.state import State
+from netbot.discovery.acceptance import accept_node
 
 
 class PresentationTests(unittest.TestCase):
@@ -34,6 +35,16 @@ class PresentationTests(unittest.TestCase):
                          "provider_node_id": "new", "advertised_name": "new-host",
                          "addresses": ["100.64.0.3"], "online": True,
                          "observed_at": "2026-01-01T00:00:00+00:00"}]}], "relationships": [], "sources": []},
+            [{"provider": "tailscale", "provider_node_id": "new", "advertised_name": "new-host",
+              "addresses": ["100.64.0.3"], "online": True, "metadata": {},
+              "observed_at": "2026-01-01T00:00:00+00:00"}])
+        state.close()
+
+    def add_acceptance_discovery(self):
+        state = State(self.db)
+        state.record_discovery_cycle(
+            "run-accept", "controller", "2026-01-01T00:00:00+00:00", "2026-01-01T00:01:00+00:00",
+            "OK", "OK", "COMPLETE", None, {"nodes": [], "relationships": [], "sources": []},
             [{"provider": "tailscale", "provider_node_id": "new", "advertised_name": "new-host",
               "addresses": ["100.64.0.3"], "online": True, "metadata": {},
               "observed_at": "2026-01-01T00:00:00+00:00"}])
@@ -115,6 +126,51 @@ class PresentationTests(unittest.TestCase):
         self.assertNotIn("Network\n", output)
         self.assertNotIn("Evidence\n", output)
         self.assertNotIn("0227e3d8810040e8a784fc52493506b9", output)
+
+    def test_accept_node_resolves_current_candidate_without_reconcile(self):
+        self.add_acceptance_discovery()
+        with patch("netbot.cli.reconcile") as reconcile:
+            output = self.invoke("accept", "new-host")
+        reconcile.assert_not_called()
+        self.assertIn("Accepted new-host", output)
+        self.assertNotIn("proposal_id", output)
+        self.assertIn("new-host", self.config.read_text())
+
+    def test_accept_node_no_match_does_not_mutate_topology(self):
+        before = self.config.read_bytes()
+        output = self.invoke("accept", "missing")
+        self.assertIn("Cannot accept missing", output)
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_accept_node_json_retains_resolution_identity(self):
+        self.add_acceptance_discovery()
+        payload = json.loads(self.invoke("accept", "new-host", "--dry-run", "--json"))
+        self.assertEqual(payload["result"], "WOULD_ACCEPT")
+        self.assertEqual(payload["requested_node"], "new-host")
+        self.assertTrue(payload["resolved_proposal_id"])
+        self.assertEqual(payload["canonical_identity"], "new-host")
+        self.assertNotIn("new-host:\n", self.config.read_text())
+
+    def test_accept_node_refuses_already_accepted_identity(self):
+        result = accept_node(self.config, self.db, "orion")
+        self.assertEqual(result["result"], "ALREADY_ACCEPTED")
+
+    def test_accept_node_refuses_ambiguous_candidates(self):
+        proposals = [
+            {"proposal_type": "NEW_IDENTITY_CANDIDATE", "proposal_id": "p1", "proposed_alias": "same", "target_entity": "a"},
+            {"proposal_type": "NEW_IDENTITY_CANDIDATE", "proposal_id": "p2", "proposed_alias": "same", "target_entity": "b"},
+        ]
+        with patch("netbot.discovery.acceptance.generate_proposals", return_value=proposals):
+            result = accept_node(self.config, self.db, "same")
+        self.assertEqual(result["result"], "AMBIGUOUS")
+
+    def test_accept_node_preserves_existing_stale_refusal(self):
+        self.add_acceptance_discovery()
+        with patch("netbot.discovery.acceptance.accept_proposal",
+                   return_value={"result": "STALE_PROPOSAL", "topology_changed": False,
+                                 "reconciliation_performed": False}):
+            result = accept_node(self.config, self.db, "new-host")
+        self.assertEqual(result["result"], "STALE_PROPOSAL")
 
     def test_inspect_json_and_human_do_not_probe(self):
         self.add_discovery()

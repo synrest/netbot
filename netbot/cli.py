@@ -29,7 +29,7 @@ from .target_activation import build_activation_plan, activate_target
 from .controller_reconcile import reconcile_controller, reconcile_exit_code
 from .discovery.cycle import run_cycle
 from .discovery.proposals import generate_proposals
-from .discovery.acceptance import accept_proposal
+from .discovery.acceptance import accept_proposal, accept_node
 from .maintenance import run_maintenance
 from .managed_adoption import adoption_plan as managed_adoption_plan, apply_adoption as apply_managed_adoption
 from .scheduler import install as scheduler_install, remove as scheduler_remove, status as scheduler_status
@@ -37,11 +37,11 @@ from .presentation import (dashboard as dashboard_view, status as status_view,
                             topology as topology_view, inspect as inspect_view,
                             events as events_view, render_dashboard, render_status,
                             render_topology, render_inspect, render_events,
-                            render_maintain, render_doctor)
+                            render_maintain, render_doctor, render_accept)
 
 def main(argv=None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",nargs="?",choices=["version","doctor","status","topology","discover","discovery","diff","reconcile","maintain","cycle","sync","inspect","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service","scheduler","events"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--target",dest="target_filter"); p.add_argument("--type",dest="proposal_type"); p.add_argument("--node",dest="proposal_node"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--expected-sha256"); p.add_argument("--interval",default="30m"); p.add_argument("--executable",dest="executable"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--json",action="store_true",help="emit deterministic JSON"); p.add_argument("-v","--verbose",action="store_true",help="show detailed maintenance diagnostics"); p.add_argument("--authorize-existing-config",action="store_true",help="authorize one safe Include insertion into an existing SSH config"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(prog="netbot"); p.add_argument("--version",action="version",version=__version__); p.add_argument("command",nargs="?",choices=["version","doctor","status","topology","discover","discovery","diff","reconcile","maintain","cycle","sync","inspect","accept","access","bindings","ssh","ssh-plan","ssh-apply","ssh-status","migrate-plan","migrate","agent","bootstrap","adopt","enroll","service","scheduler","events"]); p.add_argument("host",nargs="?"); p.add_argument("target",nargs="?"); p.add_argument("candidate",nargs="?"); p.add_argument("--target",dest="target_filter"); p.add_argument("--type",dest="proposal_type"); p.add_argument("--node",dest="proposal_node"); p.add_argument("--as",dest="topology_identity"); p.add_argument("--path",choices=["ssh","tailscale"]); p.add_argument("--user"); p.add_argument("--expected-sha256"); p.add_argument("--interval",default="30m"); p.add_argument("--executable",dest="executable"); p.add_argument("--reason",choices=["manual","launch","calendar","ipn","followup"],default="manual"); p.add_argument("--probe",action="store_true",help="explicitly perform harmless SSH probes"); p.add_argument("--dry-run",action="store_true",help="show changes without writing"); p.add_argument("--json",action="store_true",help="emit deterministic JSON"); p.add_argument("-v","--verbose",action="store_true",help="show detailed maintenance diagnostics"); p.add_argument("--authorize-existing-config",action="store_true",help="authorize one safe Include insertion into an existing SSH config"); p.add_argument("--export",action="store_true",help="export the persisted topology snapshot"); p.add_argument("--config",type=Path,default=Path("config/topology.yaml")); p.add_argument("--db",type=Path,default=Path("state/netbot.sqlite3")); p.add_argument("--generated",type=Path,default=Path("generated/topology.json")); a=p.parse_args(argv)
     if a.verbose and a.command != "maintain":
         p.error("-v/--verbose is only supported with netbot maintain")
     if a.verbose and a.json:
@@ -90,6 +90,12 @@ def main(argv=None):
             p.error("usage: netbot events")
         payload = events_view(a.config, a.db)
         print(json.dumps(payload, indent=2, sort_keys=True) if a.json else render_events(payload), end="")
+        return
+    if a.command == "accept":
+        if not a.host or a.target or a.candidate or a.target_filter or a.proposal_type or a.proposal_node:
+            p.error("usage: netbot accept NODE [--dry-run] [--json]")
+        result = accept_node(a.config, a.db, a.host, dry_run=a.dry_run)
+        print(json.dumps(result, indent=2, sort_keys=True) if a.json else render_accept(result), end="")
         return
     if a.command == "discovery":
         if a.host == "accept":
