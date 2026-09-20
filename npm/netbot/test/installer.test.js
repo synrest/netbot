@@ -3,10 +3,24 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
-const {safeVersion, sha256, install, stableLauncher} = require('../lib/installer');
+const {safeVersion, sha256, install, stableLauncher, runtimeHealthy} = require('../lib/installer');
 
 test('rejects unsafe version paths', () => assert.throws(() => safeVersion('../tmp'), /invalid/));
-test('uses absolute stable launcher target', () => assert.match(stableLauncher('/tmp/netbot', '/tmp/python'), /\/tmp\/netbot\/current\/venv\/bin\/python/));
+test('stable launcher gives an actionable repair message for a broken runtime', () => {
+  const launcher = stableLauncher('/tmp/netbot', '/tmp/python', '0.4.5');
+  assert.match(launcher, /private Python environment is broken/);
+  assert.match(launcher, /npm install -g @synrest\/netbot@0\.4\.5 --force/);
+  assert.match(launcher, /NETBOT_PYTHON=\$candidate/);
+  assert.match(launcher, /python3\.10/);
+  assert.match(launcher, /\/tmp\/netbot\/current\/venv\/bin\/python/);
+});
+test('broken active runtime is detected without touching user state', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'netbot-runtime-'));
+  fs.mkdirSync(path.join(root, 'current', 'venv', 'bin'), {recursive: true});
+  fs.symlinkSync('/path/that/does/not/exist', path.join(root, 'current', 'venv', 'bin', 'python'));
+  assert.equal(runtimeHealthy(root), false);
+  assert.equal(fs.lstatSync(path.join(root, 'current', 'venv', 'bin', 'python')).isSymbolicLink(), true);
+});
 test('wrong checksum never creates an installation', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'netbot-m10-'));
   const artifact = path.join(root, 'release.tar.gz'); fs.writeFileSync(artifact, 'not-a-release');
