@@ -7,9 +7,9 @@ const {safeVersion, sha256, install, stableLauncher, runtimeHealthy} = require('
 
 test('rejects unsafe version paths', () => assert.throws(() => safeVersion('../tmp'), /invalid/));
 test('stable launcher gives an actionable repair message for a broken runtime', () => {
-  const launcher = stableLauncher('/tmp/netbot', '/tmp/python', '0.4.5');
+  const launcher = stableLauncher('/tmp/netbot', '/tmp/python', '0.4.6');
   assert.match(launcher, /private Python environment is broken/);
-  assert.match(launcher, /npm install -g @synrest\/netbot@0\.4\.5 --force/);
+  assert.match(launcher, /npm install -g @synrest\/netbot@0\.4\.6 --force/);
   assert.match(launcher, /NETBOT_PYTHON=\$candidate/);
   assert.match(launcher, /python3\.10/);
   assert.match(launcher, /\/tmp\/netbot\/current\/venv\/bin\/python/);

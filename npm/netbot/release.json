@@ -1,7 +1,7 @@
 {
-  "version": "0.4.5",
-  "artifact": "https://github.com/synrest/netbot/releases/download/v0.4.5/netbot-0.4.5.zip",
-  "sha256": "e456525081ecdbb6ef753c3260116240d76139a2ae86ebb9399ef44c4a12a3f7",
+  "version": "0.4.6",
+  "artifact": "https://github.com/synrest/netbot/releases/download/v0.4.6/netbot-0.4.6.zip",
+  "sha256": "36bc506fde23992030937e6ad52f3f2ce11f75d611edcc81ddffc78d91cdd751",
   "python": ">=3.10",
   "platforms": ["darwin", "linux"]
 }

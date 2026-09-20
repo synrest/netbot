@@ -50,7 +50,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"npm stage publish", text)), 1)
 
     def test_version_is_consistent(self):
-        self.assertEqual(__version__, "0.4.5")
+        self.assertEqual(__version__, "0.4.6")
         self.assertIn(__version__, (ROOT / "pyproject.toml").read_text())
 
     def test_npm_package_has_trusted_publishing_repository_identity(self):
